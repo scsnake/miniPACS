@@ -2,12 +2,10 @@
 import Tkinter as tk
 from PIL import Image, ImageTk
 import glob
-import multiprocessing as mp
 import os
-
-import Tkinter as tk
-from PIL import Image, ImageTk
-from itertools import cycle
+# import mouse
+import multiprocessing as mp
+import time
 
 
 class App(tk.Tk):
@@ -34,12 +32,12 @@ class App(tk.Tk):
 
     def load_image(self, specific_image_path=None):
         if specific_image_path is None:
-            for image_path in self.images_path:
+            for k, image_path in enumerate(self.images_path):
                 if image_path not in self.loaded_image:
                     image_pil = Image.open(image_path).resize((self.image_display_w, self.image_display_h))
                     self.loaded_image[image_path] = ImageTk.PhotoImage(image_pil)
                     if len(self.loaded_image) < self.expected_image_count:
-                        self.after(500, self.load_image)
+                        self.after(500 if k==1 else 100, self.load_image)
                     return
         else:
             image_pil = Image.open(specific_image_path).resize((self.image_display_w, self.image_display_h))
@@ -52,6 +50,7 @@ class App(tk.Tk):
         else:
             self.ind = (self.ind + 1) % self.expected_image_count
         self.show_image()
+        # self.after(1000, self.next)
 
     def prior(self):
         if self.ind == '':
@@ -76,7 +75,19 @@ class App(tk.Tk):
         self.title(image_path)
 
     def run(self):
-        # self.after(1000, self.next)
-        # self.after(2000, self.next)
-        # self.after(3000, self.next)
+        self.after(1000, self.next)
+        self.after(2000, self.next)
+        self.after(3000, self.next)
         self.mainloop()
+
+# def test():
+#     x = 200
+#     y = 150
+#     app = App('~/Documents/Photos/沙巴行-sony-T2/', 3, x, y)
+#     app.mainloop()
+#
+# test()
+x = 200
+y = 150
+app = App('~/Documents/Photos/沙巴行-sony-T2/', 3, x, y)
+app.run()
