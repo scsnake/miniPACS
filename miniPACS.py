@@ -7,6 +7,7 @@ from PyQt4.QtGui import QApplication, QMainWindow, QGraphicsView, QGraphicsScene
 from PyQt4.QtGui import QPixmap, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget
 from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
 from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF
+from time import sleep
 
 
 class ImageViewer(QMainWindow):
@@ -17,14 +18,48 @@ class ImageViewer(QMainWindow):
         self.show_lock = threading.Lock()
         self.setStyleSheet('background-color: black;')
         self.reset()
+        # self._define_global_shortcuts()
+    def wheelEvent(self, QWheelEvent):
+        imageLabel = self.childAt(QWheelEvent.pos())
+        ind = self.image_labels.index(imageLabel)
+        if QWheelEvent.delta()<0:
+            self.next_image(index=ind)
+        elif QWheelEvent.delta()>0:
+            self.prior_image(index=ind)
+
+    def _define_global_shortcuts(self):
+
+        shortcuts = []
+
+        sequence = {
+            'Ctrl+Shift+Left': self.on_action_previous_comic_triggered,
+            'Ctrl+Left': self.on_action_first_page_triggered,
+            'Left': self.on_action_previous_page_triggered,
+            'Right': self.on_action_next_page_triggered,
+            'Ctrl+Right': self.on_action_last_page_triggered,
+            'Ctrl+Shift+Right': self.on_action_next_comic_triggered,
+            'Ctrl+R': self.on_action_rotate_left_triggered,
+            'Ctrl+Shift+R': self.on_action_rotate_right_triggered,
+        }
+
+        for key, value in list(sequence.items()):
+            s = QWidget.QShortcut(QKeySequence(key),
+                                    self.ui.qscroll_area_viewer, value)
+            s.setEnabled(False)
+            shortcuts.append(s)
+
+        return shortcuts
 
     def reset(self):
         try:
             for label in self.image_labels:
                 label.setParent(None)
+            for thread in self.load_threads:
+                thread.terminate()
         except:
             pass
         self.image_labels = []
+        self.load_threads = []
         self.folder = ''
         self.expected_image_count = OrderedDict()
         self.total_image_count = 0
@@ -51,12 +86,12 @@ class ImageViewer(QMainWindow):
             if m.height > w_h:
                 w_h = m.height
 
-            imageLabel = QLabel()
+            imageLabel = QLabel(self)
             imageLabel.setStyleSheet('background-color: black;')
             imageLabel.setFixedSize(m.width, m.height)
             imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             imageLabel.setScaledContents(True)
-            imageLabel.move(w_w, m.y)
+            imageLabel.setGeometry(w_w, m.y, m.width, m.height)
             self.image_labels.append(imageLabel)
 
             w_w += m.width
@@ -75,7 +110,9 @@ class ImageViewer(QMainWindow):
                 break
             self.loaded_image[AccNo] = {}
             self.ind[AccNo] = ''
-            self.load_image(AccNo, image_count)
+            load_thread = threading.Thread(target=self.load_image,args=(AccNo, image_count))
+            load_thread.start()
+            self.load_threads.append(load_thread)
             self.next_image(AccNo, i)
 
     def load_dir(self):
@@ -86,16 +123,22 @@ class ImageViewer(QMainWindow):
         self.load_lock.release()
 
     def load_image(self, AccNo, expected_count):
-        self.load_lock.acquire()
+
         last_k = 0
-        for k, image_path in enumerate(glob.glob(os.path.join(self.folder, AccNo + ' *.jpeg'))):
-            if image_path not in self.loaded_image[AccNo]:
-                self.loaded_image[AccNo][image_path] = QImage(image_path)
-                last_k = k
+        while True:
+            self.load_lock.acquire()
+            for k, image_path in enumerate(glob.glob(os.path.join(self.folder, AccNo + ' *.jpeg'))):
+                if image_path not in self.loaded_image[AccNo]:
+                    self.loaded_image[AccNo][image_path] = QImage(image_path)
+                    last_k = k
+                    break
+            is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[AccNo]
+            self.load_lock.release()
+            if is_done:
+                sleep(0.5 if last_k == 0 else 0.1)
+            else:
                 break
-        if len(self.loaded_image[AccNo]) < self.expected_image_count[AccNo]:
-            QTimer.singleShot(500 if last_k == 0 else 100, partial(self.load_image, AccNo, expected_count))
-        self.load_lock.release()
+
         return
 
     def load_single_image(self, AccNo, image_path):
