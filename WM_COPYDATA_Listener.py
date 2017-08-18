@@ -14,7 +14,7 @@ PCOPYDATASTRUCT = ctypes.POINTER(COPYDATASTRUCT)
 
 
 class WM_COPYDATA_Listener:
-    def __init__(self):
+    def __init__(self, receiver=None):
         message_map = {
             win32con.WM_COPYDATA: self.__OnCopyData
         }
@@ -36,6 +36,8 @@ class WM_COPYDATA_Listener:
             hinst,
             None
         )
+        self.receiver = receiver
+        win32gui.PumpMessages()
         # print self.hwnd
 
     def OnCopyData(self, *args, **kwargs):
@@ -46,7 +48,7 @@ class WM_COPYDATA_Listener:
     def __OnCopyData(self, hwnd, msg, wparam, lparam):
         pCDS = ctypes.cast(lparam, PCOPYDATASTRUCT)
 
-        t = threading.Thread(target=self.OnCopyData,
+        t = threading.Thread(target=self.OnCopyData if self.receiver is not None else self.receiver,
                              kwargs={'hwnd':hwnd, 'msg':msg,
                                      'wparam':wparam, 'lparam':lparam,
                                      'dwData':pCDS.contents.dwData,
@@ -56,5 +58,7 @@ class WM_COPYDATA_Listener:
 
         return 1
 
-COPYDATA_Listener = WM_COPYDATA_Listener()
-win32gui.PumpMessages()
+
+if __name__=='__main__':
+    COPYDATA_Listener = WM_COPYDATA_Listener()
+
