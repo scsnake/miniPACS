@@ -6,8 +6,23 @@ from screeninfo import get_monitors
 from PyQt4.QtGui import QApplication, QMainWindow, QGraphicsView, QGraphicsScene, QLabel, QPalette, QImage
 from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
 from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
-from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF
+from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL
 from time import sleep
+import WM_COPYDATA_Listener
+from json import loads
+
+class Listener(WM_COPYDATA_Listener):
+    dwData = 17
+    def __init__(self):
+        super(Listener, self).__init__()
+    def OnCopyData(self, *args, **kwargs):
+        try:
+            if kwargs['dwData']!=Listener.dwData:
+                return
+            str = loads(kwargs['str'])
+        except:
+            return
+
 
 
 class ImageViewer(QMainWindow):
@@ -48,7 +63,14 @@ class ImageViewer(QMainWindow):
             countLabel.setGeometry(50, 50, 200, 100)
             countLabel.setFont(self.countLabelFont)
 
+            curtainLabel = QLabel(imageLabel)
+            curtainLabel.setStyleSheet('background-color: rgba(0,0,0,100); ')
+            curtainLabel.setFixedSize(m.width, m.height)
+            curtainLabel.setGeometry(w_w, m.y, m.width, m.height)
+            curtainLabel.hide()
+
             imageLabel.count_label = countLabel
+            imageLabel.curtain_label = curtainLabel
             self.image_labels.append(imageLabel)
 
 
@@ -62,7 +84,6 @@ class ImageViewer(QMainWindow):
         # self._define_global_shortcuts()
 
     def wheelEvent(self, QWheelEvent):
-        # map(lambda x: x.clear(), self.image_labels)
         ind = -1
         for i, imageLabel in enumerate(self.image_labels):
             if imageLabel.contentsRect().contains(QWheelEvent.pos()):
@@ -102,7 +123,7 @@ class ImageViewer(QMainWindow):
         try:
             map(lambda x: x.terminate(), self.load_threads)
             map(lambda x: x.clear(), self.image_labels)
-            map(lambda x: x.count_label.clear(), self.image_labels)
+            map(lambda x: x.count_label.setText(''), self.image_labels)
         except:
             pass
         self.load_threads = []
@@ -204,27 +225,40 @@ class ImageViewer(QMainWindow):
         self.ind[AccNo] = ind
         self.show_image(ind, AccNo=AccNo)
 
+    def show_curtain(self, index=0, curtain_label=None):
+        if curtain_label is None:
+            curtain_label = self.image_labels[index].curtain_label
+        curtain_label.show()
+        curtain_label.activate()
+
     def show_image(self, image_ind, AccNo='', index=0):
         AccNo, index = self.whichLabel(AccNo, index)
 
+        self.image_labels[index].count_label.setText('%d / %d' % (image_ind + 1,
+                                                                  self.expected_image_count[AccNo]))
         try:
             image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
         except:
-            print('No path for index: %d' % image_ind)
+            self.show_curtain(index=index)
+            print('Image %d not found!' % image_ind)
             return
 
-        if image_path in self.loaded_image[AccNo]:
-            image = self.loaded_image[AccNo][image_path]
-        else:
-            image = QImage(image_path)
-            # self.load_single_image(Acc, image_path, image)
+        try:
+            if image_path in self.loaded_image[AccNo]:
+                image = self.loaded_image[AccNo][image_path]
+            else:
+                image = QImage(image_path)
+                # self.load_single_image(Acc, image_path, image)
+        except:
+            self.show_curtain(index=index)
+            print('Image %d not loaded!' % image_ind)
+            return
 
         self.image_labels[index].setPixmap(QPixmap.fromImage(image))
-        self.image_labels[index].count_label.setText('%d / %d' % (image_ind+1,
-                                                                       self.expected_image_count[AccNo]))
-
+        self.image_labels[index].activateWindow()
         self.setWindowTitle(image_path)
         self.show_lock.release()
+        self.image_labels[index].curtain_label.hide()
 
 
 class ImageViewerApp(QApplication):
