@@ -1,93 +1,276 @@
-# coding=utf-8
-import Tkinter as tk
-from PIL import Image, ImageTk
-import glob
-import os
-# import mouse
-import multiprocessing as mp
-import time
+import os, glob, sys
+import threading
+from collections import OrderedDict
+from functools import partial
+from screeninfo import get_monitors
+from PyQt4.QtGui import QApplication, QMainWindow, QGraphicsView, QGraphicsScene, QLabel, QPalette, QImage
+from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
+from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
+from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL
+from time import sleep
+import WM_COPYDATA_Listener
+from json import loads
 
-
-class App(tk.Tk):
-    def __init__(self, folder, expected_image_count, w, h):
-        tk.Tk.__init__(self)
-        self.geometry('+{}+{}'.format(w, h))
-        # self.pictures = cycle((ImageTk.PhotoImage(file=image), image) for image in image_files)
-        self.folder = folder
-        self.expected_image_count = expected_image_count
-        self.image_display_w = w
-        self.image_display_h = h
-        self.load_dir()
-        self.loaded_image = {}
-        self.load_image()
-        self.ind = ''
-        self.image_display = tk.Label(self, bg='black')
-        self.image_display.pack()
-        self.next()
-
-    def load_dir(self):
-        self.images_path = glob.glob(os.path.expanduser(self.folder + '*.JPG'))
-        if len(self.images_path) < self.expected_image_count:
-            self.after(100, self.load_more(self.folder, self.expected_image_count))
-
-    def load_image(self, specific_image_path=None):
-        if specific_image_path is None:
-            for k, image_path in enumerate(self.images_path):
-                if image_path not in self.loaded_image:
-                    image_pil = Image.open(image_path).resize((self.image_display_w, self.image_display_h))
-                    self.loaded_image[image_path] = ImageTk.PhotoImage(image_pil)
-                    if len(self.loaded_image) < self.expected_image_count:
-                        self.after(500 if k==1 else 100, self.load_image)
-                    return
-        else:
-            image_pil = Image.open(specific_image_path).resize((self.image_display_w, self.image_display_h))
-            self.loaded_image[specific_image_path] = image = ImageTk.PhotoImage(image_pil)
-            return image
-
-    def next(self):
-        if self.ind == '':
-            self.ind = 0
-        else:
-            self.ind = (self.ind + 1) % self.expected_image_count
-        self.show_image()
-        # self.after(1000, self.next)
-
-    def prior(self):
-        if self.ind == '':
-            self.ind = self.expected_image_count - 1
-        else:
-            self.ind = (self.ind + self.expected_image_count - 1) % self.expected_image_count
-        self.show_image()
-
-    def show_image(self):
+class Listener(WM_COPYDATA_Listener):
+    dwData = 17
+    def __init__(self):
+        super(Listener, self).__init__()
+    def OnCopyData(self, *args, **kwargs):
         try:
-            image_path = self.images_path[self.ind]
+            if kwargs['dwData']!=Listener.dwData:
+                return
+            str = loads(kwargs['str'])
         except:
-            print('No path for index: %d' % self.ind)
             return
 
-        if image_path in self.loaded_image:
-            image = self.loaded_image[image_path]
+
+
+class ImageViewer(QMainWindow):
+    def __init__(self, use_monitor=(1,-1)):
+        '''
+        :param use_monitor: tuple, default with second to last monitor, use (None, None) for all monitors
+        '''
+        super(ImageViewer, self).__init__()
+
+        self.load_lock = threading.Lock()
+        self.show_lock = threading.Lock()
+        self.setStyleSheet('background-color: black;')
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.countLabelFont = QFont("Verdana", 50, QFont.Normal)
+        self.reset()
+
+        w_w = w_h = w_x = w_y = 0
+        self.image_labels = []
+        for i, m in enumerate(sorted(get_monitors(), key=lambda m: m.x)):
+            if i < use_monitor[0]:
+                continue
+            if i == use_monitor[0]:
+                w_x, w_y = m.x, m.y
+
+            if m.height > w_h:
+                w_h = m.height
+
+            imageLabel = QLabel(self)
+            imageLabel.setStyleSheet('background-color: black;')
+            imageLabel.setFixedSize(m.width, m.height)
+            imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            imageLabel.setScaledContents(True)
+            imageLabel.setGeometry(w_w, m.y, m.width, m.height)
+
+            countLabel = QLabel(imageLabel)
+            countLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
+            countLabel.setFixedSize(200, 100)
+            countLabel.setGeometry(50, 50, 200, 100)
+            countLabel.setFont(self.countLabelFont)
+
+            curtainLabel = QLabel(imageLabel)
+            curtainLabel.setStyleSheet('background-color: rgba(0,0,0,100); ')
+            curtainLabel.setFixedSize(m.width, m.height)
+            curtainLabel.setGeometry(w_w, m.y, m.width, m.height)
+            curtainLabel.hide()
+
+            imageLabel.count_label = countLabel
+            imageLabel.curtain_label = curtainLabel
+            self.image_labels.append(imageLabel)
+
+
+
+            w_w += m.width
+
+            if i == use_monitor[1]:
+                break
+        self.setFixedSize(w_w, w_h)
+        self.move(w_x, w_y)
+        # self._define_global_shortcuts()
+
+    def wheelEvent(self, QWheelEvent):
+        ind = -1
+        for i, imageLabel in enumerate(self.image_labels):
+            if imageLabel.contentsRect().contains(QWheelEvent.pos()):
+                ind = i
+                break
+        if ind==-1:
+            return
+        if QWheelEvent.delta() < 0:
+            self.next_image(index=ind)
+        elif QWheelEvent.delta() > 0:
+            self.prior_image(index=ind)
+
+    def _define_global_shortcuts(self):
+
+        shortcuts = []
+
+        sequence = {
+            'Ctrl+Shift+Left': self.on_action_previous_comic_triggered,
+            'Ctrl+Left': self.on_action_first_page_triggered,
+            'Left': self.on_action_previous_page_triggered,
+            'Right': self.on_action_next_page_triggered,
+            'Ctrl+Right': self.on_action_last_page_triggered,
+            'Ctrl+Shift+Right': self.on_action_next_comic_triggered,
+            'Ctrl+R': self.on_action_rotate_left_triggered,
+            'Ctrl+Shift+R': self.on_action_rotate_right_triggered,
+        }
+
+        for key, value in list(sequence.items()):
+            s = QWidget.QShortcut(QKeySequence(key),
+                                  self.ui.qscroll_area_viewer, value)
+            s.setEnabled(False)
+            shortcuts.append(s)
+
+        return shortcuts
+
+    def reset(self):
+        try:
+            map(lambda x: x.terminate(), self.load_threads)
+            map(lambda x: x.clear(), self.image_labels)
+            map(lambda x: x.count_label.setText(''), self.image_labels)
+        except:
+            pass
+        self.load_threads = []
+        self.folder = ''
+        self.expected_image_count = OrderedDict()
+        self.total_image_count = 0
+        self.loaded_image = OrderedDict()
+        self.ind = OrderedDict()
+
+    def load(self, folder_path,
+             expected_image_count):
+        '''
+        :param folder_path: str
+        :param expected_image_count: dict with keys of AccNo, values of total image count
+        '''
+
+
+
+        self.folder = folder_path
+        self.expected_image_count = OrderedDict(expected_image_count)
+        self.total_image_count = sum(self.expected_image_count.values())
+
+        # self.load_dir()
+        for i, (AccNo, image_count) in enumerate(self.expected_image_count.iteritems()):
+            if i >= len(self.image_labels):
+                break
+            self.loaded_image[AccNo] = {}
+            self.ind[AccNo] = ''
+            load_thread = threading.Thread(target=self.load_image, args=(AccNo, image_count))
+            load_thread.start()
+            self.load_threads.append(load_thread)
+            self.next_image(AccNo, i)
+
+    def load_dir(self):
+        self.load_lock.acquire()
+        self.images_path = glob.glob(os.path.join(self.folder, '*.jpeg'))
+        if len(self.images_path) < self.total_image_count:
+            QTimer.singleShot(100, self.load_dir)
+        self.load_lock.release()
+
+    def load_image(self, AccNo, expected_count):
+
+        last_k = 0
+        while True:
+            self.load_lock.acquire()
+            for k, image_path in enumerate(glob.glob(os.path.join(self.folder, AccNo + ' *.jpeg'))):
+                if image_path not in self.loaded_image[AccNo]:
+                    self.loaded_image[AccNo][image_path] = QImage(image_path)
+                    last_k = k
+                    break
+            is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[AccNo]
+            self.load_lock.release()
+            if is_done:
+                sleep(0.5 if last_k == 0 else 0.1)
+            else:
+                break
+
+        return
+
+    def load_single_image(self, AccNo, image_path):
+        self.load_lock.acquire()
+        self.loaded_image[AccNo][image_path] = image = QImage(image_path)
+        self.load_lock.release()
+        return image
+
+    def whichLabel(self, AccNo='', index=0):
+        if AccNo != '':
+            for i, (acc, _) in enumerate(self.ind.iteritems()):
+                if acc == AccNo:
+                    return (AccNo, i)
         else:
-            image = self.load_image(image_path)
+            return (self.ind.items()[index][0], index)
 
-        self.image_display.config(image=image)
-        self.title(image_path)
+    def next_image(self, AccNo='', index=0):
+        self.show_lock.acquire()
+        AccNo, index = self.whichLabel(AccNo, index)
+        expected_image_count = self.expected_image_count[AccNo]
+        ind = self.ind[AccNo]
 
-    def run(self):
-        self.after(1000, self.next)
-        self.after(2000, self.next)
-        self.after(3000, self.next)
-        self.mainloop()
+        if ind == '':
+            ind = 0
+        else:
+            ind = (ind + 1) % expected_image_count
+        self.ind[AccNo] = ind
 
-# def test():
-#     x = 200
-#     y = 150
-#     app = App('~/Documents/Photos/沙巴行-sony-T2/', 3, x, y)
-#     app.mainloop()
-#
-# test()
-x = 200
-y = 150
-app = App('~/Documents/Photos/沙巴行-sony-T2/', 3, x, y)
-app.run()
+        self.show_image(ind, AccNo=AccNo)
+        # self.after(1000, self.next_image)
+
+    def prior_image(self, AccNo='', index=0):
+        self.show_lock.acquire()
+        AccNo, index = self.whichLabel(AccNo, index)
+        expected_image_count = self.expected_image_count[AccNo]
+        ind = self.ind[AccNo]
+
+        if ind == '':
+            ind = expected_image_count - 1
+        else:
+            ind = (ind + expected_image_count - 1) % expected_image_count
+        self.ind[AccNo] = ind
+        self.show_image(ind, AccNo=AccNo)
+
+    def show_curtain(self, index=0, curtain_label=None):
+        if curtain_label is None:
+            curtain_label = self.image_labels[index].curtain_label
+        curtain_label.show()
+        curtain_label.activate()
+
+    def show_image(self, image_ind, AccNo='', index=0):
+        AccNo, index = self.whichLabel(AccNo, index)
+
+        self.image_labels[index].count_label.setText('%d / %d' % (image_ind + 1,
+                                                                  self.expected_image_count[AccNo]))
+        try:
+            image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
+        except:
+            self.show_curtain(index=index)
+            print('Image %d not found!' % image_ind)
+            return
+
+        try:
+            if image_path in self.loaded_image[AccNo]:
+                image = self.loaded_image[AccNo][image_path]
+            else:
+                image = QImage(image_path)
+                # self.load_single_image(Acc, image_path, image)
+        except:
+            self.show_curtain(index=index)
+            print('Image %d not loaded!' % image_ind)
+            return
+
+        self.image_labels[index].setPixmap(QPixmap.fromImage(image))
+        self.image_labels[index].activateWindow()
+        self.setWindowTitle(image_path)
+        self.show_lock.release()
+        self.image_labels[index].curtain_label.hide()
+
+
+class ImageViewerApp(QApplication):
+    def __init__(self):
+        super(ImageViewerApp, self).__init__()
+        self.screen_count = QDesktopWidget.screenCount()
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    imageViewer = ImageViewer()
+    imageViewer.load(r'C:\Users\IDI\Documents\feedRIS\T0173278453 4587039',
+                     {'T0173278453': 2})
+    imageViewer.show()
+    sys.exit(app.exec_())
