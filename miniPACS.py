@@ -11,22 +11,9 @@ from time import sleep
 import WM_COPYDATA_Listener
 from json import loads
 
-class Listener(WM_COPYDATA_Listener):
-    dwData = 17
-    def __init__(self):
-        super(Listener, self).__init__()
-    def OnCopyData(self, *args, **kwargs):
-        try:
-            if kwargs['dwData']!=Listener.dwData:
-                return
-            str = loads(kwargs['str'])
-        except:
-            return
-
-
 
 class ImageViewer(QMainWindow):
-    def __init__(self, use_monitor=(1,-1)):
+    def __init__(self, use_monitor=(1, -1)):
         '''
         :param use_monitor: tuple, default with second to last monitor, use (None, None) for all monitors
         '''
@@ -73,14 +60,14 @@ class ImageViewer(QMainWindow):
             imageLabel.curtain_label = curtainLabel
             self.image_labels.append(imageLabel)
 
-
-
             w_w += m.width
 
             if i == use_monitor[1]:
                 break
         self.setFixedSize(w_w, w_h)
         self.move(w_x, w_y)
+        self.hide()
+        self.setEnabled(False)
         # self._define_global_shortcuts()
 
     def wheelEvent(self, QWheelEvent):
@@ -89,7 +76,7 @@ class ImageViewer(QMainWindow):
             if imageLabel.contentsRect().contains(QWheelEvent.pos()):
                 ind = i
                 break
-        if ind==-1:
+        if ind == -1:
             return
         if QWheelEvent.delta() < 0:
             self.next_image(index=ind)
@@ -132,16 +119,17 @@ class ImageViewer(QMainWindow):
         self.total_image_count = 0
         self.loaded_image = OrderedDict()
         self.ind = OrderedDict()
+        self.AccNo = ''
+        self.ChartNo = ''
 
     def load(self, folder_path,
-             expected_image_count):
+             expected_image_count, AccNo, ChartNo):
         '''
         :param folder_path: str
         :param expected_image_count: dict with keys of AccNo, values of total image count
         '''
-
-
-
+        self.AccNo = AccNo
+        self.ChartNo = ChartNo
         self.folder = folder_path
         self.expected_image_count = OrderedDict(expected_image_count)
         self.total_image_count = sum(self.expected_image_count.values())
@@ -229,7 +217,7 @@ class ImageViewer(QMainWindow):
         if curtain_label is None:
             curtain_label = self.image_labels[index].curtain_label
         curtain_label.show()
-        curtain_label.activate()
+        curtain_label.activateWindow()
 
     def show_image(self, image_ind, AccNo='', index=0):
         AccNo, index = self.whichLabel(AccNo, index)
@@ -255,6 +243,8 @@ class ImageViewer(QMainWindow):
             return
 
         self.image_labels[index].setPixmap(QPixmap.fromImage(image))
+        self.image_labels[index].setEnabled(True)
+        self.image_labels[index].show()
         self.image_labels[index].activateWindow()
         self.setWindowTitle(image_path)
         self.show_lock.release()
@@ -262,9 +252,134 @@ class ImageViewer(QMainWindow):
 
 
 class ImageViewerApp(QApplication):
-    def __init__(self):
+    dwData = 17
+
+    def __init__(self, folderPath, totalViewer=4):
         super(ImageViewerApp, self).__init__()
         self.screen_count = QDesktopWidget.screenCount()
+        self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
+        self.folder_path = folderPath
+        self.viewers = []
+        self.viewer_index = -1
+        self.study_index = -1
+        self.total_viewer_count = totalViewer
+        self.study_list = []
+        self.preload_threads = []
+        self.study_list_lock = threading.Lock()
+        self.show_study_lock = threading.Lock()
+        self.load_thread_lock = threading.Lock()
+
+        if self.total_viewer_count > 2:
+            self.preload_count = 2
+        elif self.total_viewer_count > 1:
+            self.preload_count = 1
+        else:
+            self.preload_count = 0
+
+        for _ in range(totalViewer):
+            self.viewers.append(ImageViewer())
+
+        self.next_study()
+
+    def load(self, jsonStr):
+        return self.listener(dwData=ImageViewerApp.dwData, str=jsonStr)
+
+    def listener(self, *args, **kwargs):
+        try:
+            if kwargs['dwData'] != ImageViewerApp.dwData:
+                return
+            new_list = loads(kwargs['str'])
+
+            self.study_list_lock.acquire()
+            self.study_list += new_list
+            self.study_list_lock.release()
+        except:
+            return
+
+    def next_study(self):
+        self.show_study_lock.acquire()
+        thisStudyInd = self.study_index + 1
+        if not thisStudyInd < len(self.study_list):
+            print 'Beyond current study list!'
+            self.show_study_lock.release()
+            return
+        thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
+
+        self.show_study(viewer=thisViewerInd, study=thisStudyInd)
+        self.preload()
+
+    def prior_study(self):
+        self.show_study_lock.acquire()
+        thisStudyInd = self.study_index - 1
+        if thisStudyInd < 0:
+            print 'Beyond current study list!'
+            self.show_study_lock.release()
+            return
+        thisViewerInd = self.prior_index(self.viewer_index, self.total_viewer_count)
+
+        self.show_study(viewer=thisViewerInd, study=thisStudyInd)
+
+    def get_folder_path(self, study):
+        return os.path.join(self.folder_path, self.study_list[study]['AccNo'] + ' ' + self.study_list[study]['ChartNo'])
+
+    def show_study(self, viewer, study):
+        if self.viewers[viewer].AccNo != self.study_list[study]['AccNo']:
+            self.load_thread_lock.acquire()
+            self.viewers[viewer].load(folder_path=self.get_folder_path(study),
+                                      expected_image_count=self.study_list[study]['expected_image_count'],
+                                      AccNo=self.study_list[study]['AccNo'],
+                                      ChartNo=self.study_list[study]['ChartNo'])
+            self.load_thread_lock.release()
+
+        self.viewers[viewer].setEnabled(True)
+        self.viewers[viewer].show()
+        self.viewers[viewer].activateWindow()
+        self.viewers[self.viewer_index].hide()
+        self.viewers[self.viewer_index].setEnabled(False)
+        self.viewer_index = viewer
+        self.study_index = study
+        self.show_study_lock.release()
+
+    def hide(self):
+        self.show_study_lock.acquire()
+        self.viewers[self.viewer_index].hide()
+        self.viewers[self.viewer_index].setEnabled(False)
+        self.show_study_lock.release()
+
+    def next_index(self, ind, total):
+        return (ind + 1) % total
+
+    def prior_index(self, ind, total):
+        return (ind - 1 + total) % total
+
+    def preload(self):
+        if self.preload_count == 0:
+            return
+
+        self.load_thread_lock.acquire()
+
+        try:
+            map(lambda t: t.cancel(), self.preload_threads)
+            map(lambda t: t.terminate(), self.preload_threads)
+        except:
+            pass
+
+        self.preload_threads = []
+        for i in range(self.preload_count):
+            if not self.study_index + i + 1 < len(self.study_list):
+                break
+            nextInd = self.next_index(self.viewer_index + i, self.total_viewer_count)
+            study = self.study_list[self.study_index + 1 + i]
+            th = threading.Timer(1000 * (i + 1),
+                                 function=self.viewers[nextInd].load,
+                                 kwargs={'folder_path': self.get_folder_path(self.study_index + 1 + i),
+                                         'expected_image_count': study['expected_image_count'],
+                                         'AccNo': study['AccNo'],
+                                         'ChartNo': study['ChartNo']})
+            th.start()
+            self.preload_threads.append(th)
+
+        self.load_thread_lock.release()
 
 
 if __name__ == '__main__':
