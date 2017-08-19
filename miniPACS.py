@@ -9,6 +9,7 @@ from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColo
 from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL
 from time import sleep
 import WM_COPYDATA_Listener
+import SetWindowPos
 from json import loads
 
 
@@ -83,28 +84,28 @@ class ImageViewer(QMainWindow):
         elif QWheelEvent.delta() > 0:
             self.prior_image(index=ind)
 
-    def _define_global_shortcuts(self):
-
-        shortcuts = []
-
-        sequence = {
-            'Ctrl+Shift+Left': self.on_action_previous_comic_triggered,
-            'Ctrl+Left': self.on_action_first_page_triggered,
-            'Left': self.on_action_previous_page_triggered,
-            'Right': self.on_action_next_page_triggered,
-            'Ctrl+Right': self.on_action_last_page_triggered,
-            'Ctrl+Shift+Right': self.on_action_next_comic_triggered,
-            'Ctrl+R': self.on_action_rotate_left_triggered,
-            'Ctrl+Shift+R': self.on_action_rotate_right_triggered,
-        }
-
-        for key, value in list(sequence.items()):
-            s = QWidget.QShortcut(QKeySequence(key),
-                                  self.ui.qscroll_area_viewer, value)
-            s.setEnabled(False)
-            shortcuts.append(s)
-
-        return shortcuts
+    # def _define_global_shortcuts(self):
+    #
+    #     shortcuts = []
+    #
+    #     sequence = {
+    #         'Ctrl+Shift+Left': self.on_action_previous_comic_triggered,
+    #         'Ctrl+Left': self.on_action_first_page_triggered,
+    #         'Left': self.on_action_previous_page_triggered,
+    #         'Right': self.on_action_next_page_triggered,
+    #         'Ctrl+Right': self.on_action_last_page_triggered,
+    #         'Ctrl+Shift+Right': self.on_action_next_comic_triggered,
+    #         'Ctrl+R': self.on_action_rotate_left_triggered,
+    #         'Ctrl+Shift+R': self.on_action_rotate_right_triggered,
+    #     }
+    #
+    #     for key, value in list(sequence.items()):
+    #         s = QWidget.QShortcut(QKeySequence(key),
+    #                               self.ui.qscroll_area_viewer, value)
+    #         s.setEnabled(False)
+    #         shortcuts.append(s)
+    #
+    #     return shortcuts
 
     def reset(self):
         try:
@@ -217,13 +218,15 @@ class ImageViewer(QMainWindow):
         if curtain_label is None:
             curtain_label = self.image_labels[index].curtain_label
         curtain_label.show()
+        curtain_label.raise_()
         curtain_label.activateWindow()
 
     def show_image(self, image_ind, AccNo='', index=0):
         AccNo, index = self.whichLabel(AccNo, index)
 
-        self.image_labels[index].count_label.setText('%d / %d' % (image_ind + 1,
-                                                                  self.expected_image_count[AccNo]))
+        image_label = self.image_labels[index]
+        image_label.count_label.setText('%d / %d' % (image_ind + 1,
+                                                     self.expected_image_count[AccNo]))
         try:
             image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
         except:
@@ -242,13 +245,13 @@ class ImageViewer(QMainWindow):
             print('Image %d not loaded!' % image_ind)
             return
 
-        self.image_labels[index].setPixmap(QPixmap.fromImage(image))
-        self.image_labels[index].setEnabled(True)
-        self.image_labels[index].show()
-        self.image_labels[index].activateWindow()
+        image_label.setPixmap(QPixmap.fromImage(image))
+        image_label.setEnabled(True)
+        image_label.show()
+        image_label.activateWindow()
         self.setWindowTitle(image_path)
         self.show_lock.release()
-        self.image_labels[index].curtain_label.hide()
+        image_label.curtain_label.hide()
 
 
 class ImageViewerApp(QApplication):
@@ -257,7 +260,7 @@ class ImageViewerApp(QApplication):
     def __init__(self, folderPath, totalViewer=4):
         super(ImageViewerApp, self).__init__()
         self.screen_count = QDesktopWidget.screenCount()
-        self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
+        self.WM_COPYDATA_Listener = WM_COPYDATA_Listener.WM_COPYDATA_Listener(receiver=self.listener)
         self.folder_path = folderPath
         self.viewers = []
         self.viewer_index = -1
@@ -291,7 +294,9 @@ class ImageViewerApp(QApplication):
             new_list = loads(kwargs['str'])
 
             self.study_list_lock.acquire()
-            self.study_list += new_list
+            for l in new_list:
+                l['folder_path'] = os.path.join(self.folder_path, l['AccNo'] + ' ' + l['ChartNo'])
+                self.study_list.append(l)
             self.study_list_lock.release()
         except:
             return
@@ -319,31 +324,35 @@ class ImageViewerApp(QApplication):
 
         self.show_study(viewer=thisViewerInd, study=thisStudyInd)
 
-    def get_folder_path(self, study):
-        return os.path.join(self.folder_path, self.study_list[study]['AccNo'] + ' ' + self.study_list[study]['ChartNo'])
-
     def show_study(self, viewer, study):
-        if self.viewers[viewer].AccNo != self.study_list[study]['AccNo']:
+        w = self.viewers[viewer]
+        s = self.study_list[study]
+        if w.AccNo != s['AccNo']:
             self.load_thread_lock.acquire()
-            self.viewers[viewer].load(folder_path=self.get_folder_path(study),
-                                      expected_image_count=self.study_list[study]['expected_image_count'],
-                                      AccNo=self.study_list[study]['AccNo'],
-                                      ChartNo=self.study_list[study]['ChartNo'])
+            w.load(**s)
+            # w.load(folder_path=self.get_folder_path(study), **s)
+            # expected_image_count=s['expected_image_count'],
+            # AccNo=s['AccNo'],
+            # ChartNo=s['ChartNo'])
             self.load_thread_lock.release()
 
-        self.viewers[viewer].setEnabled(True)
-        self.viewers[viewer].show()
-        self.viewers[viewer].activateWindow()
-        self.viewers[self.viewer_index].hide()
-        self.viewers[self.viewer_index].setEnabled(False)
+        with self.viewers[self.viewer_index] as c:
+            c.hide()
+            c.setEnabled(False)
+
+        w.setEnabled(True)
+        w.show()
+        w.raise_()
+        w.activateWindow()
         self.viewer_index = viewer
         self.study_index = study
         self.show_study_lock.release()
 
     def hide(self):
         self.show_study_lock.acquire()
-        self.viewers[self.viewer_index].hide()
-        self.viewers[self.viewer_index].setEnabled(False)
+        with self.viewers[self.viewer_index] as c:
+            c.hide()
+            c.setEnabled(False)
         self.show_study_lock.release()
 
     def next_index(self, ind, total):
@@ -365,19 +374,27 @@ class ImageViewerApp(QApplication):
             pass
 
         self.preload_threads = []
+        hwndInsertAfter = self.viewers(self.viewer_index).winId()
         for i in range(self.preload_count):
             if not self.study_index + i + 1 < len(self.study_list):
                 break
             nextInd = self.next_index(self.viewer_index + i, self.total_viewer_count)
             study = self.study_list[self.study_index + 1 + i]
+            viewer = self.viewers[nextInd]
             th = threading.Timer(1000 * (i + 1),
-                                 function=self.viewers[nextInd].load,
-                                 kwargs={'folder_path': self.get_folder_path(self.study_index + 1 + i),
-                                         'expected_image_count': study['expected_image_count'],
-                                         'AccNo': study['AccNo'],
-                                         'ChartNo': study['ChartNo']})
+                                 function=viewer.load,
+                                 kwargs=study)
+            # kwargs={'folder_path': self.get_folder_path(self.study_index + 1 + i),
+            #         'expected_image_count': study['expected_image_count'],
+            #         'AccNo': study['AccNo'],
+            #         'ChartNo': study['ChartNo']})
             th.start()
             self.preload_threads.append(th)
+
+            thisViewerHwnd = viewer.winId()
+            SetWindowPos.insertAfter(thisViewerHwnd, hwndInsertAfter)
+            hwndInsertAfter = thisViewerHwnd
+            viewer.show()
 
         self.load_thread_lock.release()
 
