@@ -26,6 +26,7 @@ class ImageViewer(QMainWindow):
         self.setStyleSheet('background-color: black;')
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.countLabelFont = QFont("Verdana", 50, QFont.Normal)
+
         self.reset()
 
         w_w = w_h = w_x = w_y = 0
@@ -71,10 +72,10 @@ class ImageViewer(QMainWindow):
                 oldHxLabel.viewport().setAutoFillBackground(False)
                 oldHxLabel.setGeometry(w_w, m.y + m.height - 200, m.width, 200)
                 oldHxLabel.setFont(QFont('Verdana', 24, QFont.Normal))
-                oldHxLabel.setText('test\ntest\ntest\ntest\ntest\ntest')
-                oldHxLabel.show()
-                # oldHxLabel.hide()
-                self.oldhx_label = oldHxLabel
+                # oldHxLabel.setText('test\ntest\ntest\ntest\ntest\ntest')
+                # oldHxLabel.show()
+                oldHxLabel.hide()
+                self.old_hx_label = oldHxLabel
 
             w_w += m.width
 
@@ -130,6 +131,7 @@ class ImageViewer(QMainWindow):
             map(lambda x: x.count_label.setText(''), self.image_labels)
         except:
             pass
+        self.old_hx = ''
         self.load_threads = []
         self.folder = ''
         self.expected_image_count = OrderedDict()
@@ -258,6 +260,7 @@ class ImageViewer(QMainWindow):
             print('Image %d not loaded!' % image_ind)
             return
 
+        self.AccNo = AccNo
         image_label.setPixmap(QPixmap.fromImage(image))
         image_label.setEnabled(True)
         image_label.show()
@@ -285,7 +288,9 @@ class ImageViewerApp(QApplication):
         self.show_study_lock = threading.Lock()
         self.load_thread_lock = threading.Lock()
         self.bridge_hwnd = 0
-        self.old_hx = {}
+        self.old_hx_list = {}
+        self.AccNo = ''
+        self.old_hx_thread = None
 
         if self.total_viewer_count > 2:
             self.preload_count = 2
@@ -320,7 +325,7 @@ class ImageViewerApp(QApplication):
                 return
 
             if 'oldHx' in json_data:
-                self.old_hx.update(json_data['oldHx'])
+                self.old_hx_list.update(json_data['oldHx'])
                 return
 
             # self.study_list_lock.acquire()
@@ -361,7 +366,8 @@ class ImageViewerApp(QApplication):
     def show_study(self, viewer, study):
         w = self.viewers[viewer]
         s = self.study_list[study]
-        if w.AccNo != s['AccNo']:
+        AccNo = s['AccNo']
+        if w.AccNo != AccNo:
             self.load_thread_lock.acquire()
             w.load(**s)
             # w.load(folder_path=self.get_folder_path(study), **s)
@@ -381,6 +387,34 @@ class ImageViewerApp(QApplication):
         self.viewer_index = viewer
         self.study_index = study
         self.show_study_lock.release()
+        self.AccNo = AccNo
+
+        try:
+            self.old_hx_thread.terminate()
+        except:
+            pass
+        finally:
+            th = threading.Thread(target=self.load_old_hx, args=(AccNo, w))
+            th.start()
+            self.old_hx_thread = th
+
+    def load_old_hx(self, AccNo=None, win=None):
+        if AccNo is None:
+            AccNo = self.AccNo
+        if win is None:
+            win = self.viewers[self.viewer_index]
+        while True:
+            if AccNo in self.old_hx_list:
+                old_hx = self.old_hx_list[AccNo]
+                win.old_hx = old_hx
+                win.old_hx_label.setText(old_hx)
+                if old_hx == '':
+                    win.old_hx_label.hide()
+                else:
+                    win.old_hx_label.show()
+                return
+            else:
+                sleep(0.5)
 
     def hide(self):
         self.show_study_lock.acquire()
