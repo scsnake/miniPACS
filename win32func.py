@@ -46,7 +46,7 @@ class WM_COPYDATA_Listener:
             None
         )
         self.receiver = receiver
-        win32gui.PumpMessages()
+        threading.Thread(target=win32gui.PumpMessages).start()
         # print self.hwnd
 
     def OnCopyData(self, *args, **kwargs):
@@ -65,6 +65,8 @@ class WM_COPYDATA_Listener:
         t.start()
 
         return 1
+
+
 
 
 if __name__ == '__main__':
