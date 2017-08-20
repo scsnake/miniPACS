@@ -134,7 +134,7 @@ class ImageViewer(QMainWindow):
         self.old_hx = ''
         self.load_threads = []
         self.folder = ''
-        self.expected_image_count = OrderedDict()
+        self.expected_image_count = []
         self.total_image_count = 0
         self.loaded_image = OrderedDict()
         self.ind = OrderedDict()
@@ -147,11 +147,15 @@ class ImageViewer(QMainWindow):
         self.AccNo = AccNo
         self.ChartNo = ChartNo
         self.folder = folder_path
-        self.expected_image_count = OrderedDict(expected_image_count)
-        self.total_image_count = sum(self.expected_image_count.values())
+        self.expected_image_count = expected_image_count
+
+        image_count_sum = 0
+        for image_count in self.expected_image_count:
+            sum += sum(image_count.values())
+        self.total_image_count = image_count_sum
 
         # self.load_dir()
-        for i, (AccNo, image_count) in enumerate(self.expected_image_count.iteritems()):
+        for i, (AccNo, image_count) in enumerate(self.expected_image_count):
             if i >= len(self.image_labels):
                 break
             self.loaded_image[AccNo] = {}
@@ -169,7 +173,7 @@ class ImageViewer(QMainWindow):
         self.load_lock.release()
 
     def load_image(self, AccNo, expected_count):
-
+        AccNo, index = self.whichLabel(AccNo=AccNo)
         last_k = 0
         while True:
             self.load_lock.acquire()
@@ -178,7 +182,7 @@ class ImageViewer(QMainWindow):
                     self.loaded_image[AccNo][image_path] = QImage(image_path)
                     last_k = k
                     break
-            is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[AccNo]
+            is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[index][AccNo]
             self.load_lock.release()
             if is_done:
                 sleep(0.5 if last_k == 0 else 0.1)
@@ -204,7 +208,7 @@ class ImageViewer(QMainWindow):
     def next_image(self, AccNo='', index=0):
         self.show_lock.acquire()
         AccNo, index = self.whichLabel(AccNo, index)
-        expected_image_count = self.expected_image_count[AccNo]
+        expected_image_count = self.expected_image_count[index][AccNo]
         ind = self.ind[AccNo]
 
         if ind == '':
@@ -219,7 +223,7 @@ class ImageViewer(QMainWindow):
     def prior_image(self, AccNo='', index=0):
         self.show_lock.acquire()
         AccNo, index = self.whichLabel(AccNo, index)
-        expected_image_count = self.expected_image_count[AccNo]
+        expected_image_count = self.expected_image_count[index][AccNo]
         ind = self.ind[AccNo]
 
         if ind == '':
@@ -241,7 +245,7 @@ class ImageViewer(QMainWindow):
 
         image_label = self.image_labels[index]
         image_label.count_label.setText('%d / %d' % (image_ind + 1,
-                                                     self.expected_image_count[AccNo]))
+                                                     self.expected_image_count[index][AccNo]))
         try:
             image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
         except:
@@ -321,7 +325,7 @@ class ImageViewerApp(QApplication):
             json_data = json.loads(kwargs['lpData'])
 
             if 'setBridgeHwnd' in json_data:
-                self.bridge_hwnd = json_data['setBridgeHwnd']
+                self.bridge_hwnd = int(json_data['setBridgeHwnd'])
                 return
 
             if 'oldHx' in json_data:
