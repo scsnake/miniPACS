@@ -268,7 +268,7 @@ class ImageViewerApp(QApplication):
         self.total_viewer_count = totalViewer
         self.study_list = []
         self.preload_threads = []
-        self.study_list_lock = threading.Lock()
+        # self.study_list_lock = threading.Lock()
         self.show_study_lock = threading.Lock()
         self.load_thread_lock = threading.Lock()
 
@@ -293,11 +293,11 @@ class ImageViewerApp(QApplication):
                 return
             new_list = loads(kwargs['str'])
 
-            self.study_list_lock.acquire()
+            # self.study_list_lock.acquire()
             for l in new_list:
                 l['folder_path'] = os.path.join(self.folder_path, l['AccNo'] + ' ' + l['ChartNo'])
-                self.study_list.append(l)
-            self.study_list_lock.release()
+                self.study_list.append(l) # list.append is atomic
+            # self.study_list_lock.release()
         except:
             return
 
@@ -375,6 +375,7 @@ class ImageViewerApp(QApplication):
 
         self.preload_threads = []
         hwndInsertAfter = self.viewers(self.viewer_index).winId()
+        # self.study_list_lock needed?
         for i in range(self.preload_count):
             if not self.study_index + i + 1 < len(self.study_list):
                 break
@@ -397,6 +398,9 @@ class ImageViewerApp(QApplication):
             viewer.show()
 
         self.load_thread_lock.release()
+
+    def save_report(self):
+
 
 
 if __name__ == '__main__':
