@@ -495,7 +495,7 @@ class ImageViewerApp(QApplication):
             viewer.load(**study)
 
         SetWindowPos.insertAfter(viewer.winId(), hwndInsertAfter)
-        
+
         viewer.show()
 
         self.load_thread_lock.release()
