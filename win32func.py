@@ -70,4 +70,5 @@ class WM_COPYDATA_Listener:
 
 
 if __name__ == '__main__':
+    Send_WM_COPYDATA( 0xfa19ee,'test')
     COPYDATA_Listener = WM_COPYDATA_Listener()
