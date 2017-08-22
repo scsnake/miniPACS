@@ -23,3 +23,17 @@ def moveToTop(hwnd):
                           win32con.HWND_NOTOPMOST,  # disable the always on top, but leave window at its top position
                           0, 0, 0, 0,
                           win32con.SWP_DRAWFRAME | win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+
+
+def qt_handler_converter(win_id):
+    # from ctypes import pythonapi, c_void_p, py_object
+
+    # Setup arguments and return types
+    ctypes.pythonapi.PyCObject_AsVoidPtr.restype = ctypes.c_void_p
+    ctypes.pythonapi.PyCObject_AsVoidPtr.argtypes = [ctypes.py_object]
+
+    # Convert PyCObject to a void pointer
+    hWnd = ctypes.pythonapi.PyCObject_AsVoidPtr(win_id)
+
+    return hWnd
+
