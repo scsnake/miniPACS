@@ -24,9 +24,8 @@ class ImageViewer(QMainWindow):
         self.load_lock = threading.Lock()
         self.show_lock = threading.Lock()
         self.setStyleSheet('background-color: black;')
-        self.setWindowFlags(Qt.ToolTip)
+        self.setWindowFlags(Qt.Tool)
         self.setWindowFlags(Qt.FramelessWindowHint)
-
 
         self.reset()
 
@@ -48,13 +47,14 @@ class ImageViewer(QMainWindow):
             imageLabel.setStyleSheet('background-color: black;')
             imageLabel.setFixedSize(m.width, m.height)
             imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            imageLabel.setScaledContents(True)
+            # imageLabel.setScaledContents(True)
             imageLabel.setGeometry(w_w, m.y, m.width, m.height)
+            imageLabel.setAlignment(Qt.AlignCenter)
 
             countLabel = QLabel(imageLabel)
             countLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
             countLabel.setFixedSize(200, 100)
-            countLabel.setGeometry(50, 50, 200, 100)
+            countLabel.setGeometry(50, 50, 250, 100)
             countLabel.setFont(QFont("Verdana", 50, QFont.Normal))
 
             curtainLabel = QLabel(imageLabel)
@@ -103,8 +103,10 @@ class ImageViewer(QMainWindow):
         self.connect(self, SIGNAL('hide_disable'), self.hide_disable)
         self.connect(self, SIGNAL('next_image'), self.next_image)
         self.connect(self, SIGNAL('prior_image'), self.prior_image)
+        self.connect(self, SIGNAL('change_image'), self.change_image)
 
         # self._define_global_shortcuts()
+
     def show_enable(self):
         self.setEnabled(True)
         self.setWindowFlags(Qt.Widget | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowStaysOnTopHint)
@@ -170,7 +172,7 @@ class ImageViewer(QMainWindow):
         self.ind = OrderedDict()
         self.AccNo = ''
         self.ChartNo = ''
-        self.timers=[]
+        self.timers = []
 
     def load(self, study):
 
@@ -178,7 +180,7 @@ class ImageViewer(QMainWindow):
         logging.info(study['ChartNo'])
         self.reset()
 
-        ChartNo= study['ChartNo']
+        ChartNo = study['ChartNo']
         AccNo = study['AccNo']
         folder_path = study['folder_path']
         expected_image_count = study['expected_image_count']
@@ -194,15 +196,15 @@ class ImageViewer(QMainWindow):
 
         # self.load_dir()
         for i, d in enumerate(self.expected_image_count):
-            AccNo, image_count = d.keys()[0], d.values()[0]
+            acc, image_count = d.keys()[0], d.values()[0]
             if i >= len(self.image_labels):
                 break
-            self.loaded_image[AccNo] = {}
-            self.ind[AccNo] = ''
-            threading.Thread(target=partial(self.load_image,AccNo,image_count))
-            self.next_image(AccNo, i)
+            self.loaded_image[acc] = {}
+            self.ind[acc] = ''
+            threading.Thread(target=partial(self.load_image, acc, image_count))
+            self.next_image(acc, i)
         self.AccNo = AccNo
-        self.info_label.setText(self.AccNo+'\n'+self.ChartNo)
+        self.info_label.setText(self.AccNo + '\n' + self.ChartNo)
 
     def load_image(self, AccNo, expected_count):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -246,6 +248,20 @@ class ImageViewer(QMainWindow):
                     return (AccNo, i)
         else:
             return self.ind.items()[index][0], index
+
+    def change_image(self, is_next, mouseX, mouseY):
+        index = 0
+        g = self.geometry()
+        mouseX -= g.left()
+        mouseY -= g.top()
+        for i, image_label in enumerate(self.image_labels):
+            if image_label.geometry().contains(mouseX, mouseY):
+                index = i
+                break
+        if is_next:
+            self.emit(SIGNAL('next_image'), '', index)
+        else:
+            self.emit(SIGNAL('prior_image'), '', index)
 
     def next_image(self, AccNo='', index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -311,8 +327,11 @@ class ImageViewer(QMainWindow):
             self.show_curtain(index=index)
             print('Image %d not loaded!' % image_ind)
             return
+        px = QPixmap.fromImage(image)
+        w = image_label.width()
+        h = image_label.height()
 
-        image_label.setPixmap(QPixmap.fromImage(image))
+        image_label.setPixmap(px.scaled(w, h, Qt.KeepAspectRatio))
         image_label.setEnabled(True)
         image_label.show()
         image_label.activateWindow()
@@ -385,7 +404,7 @@ class ImageViewerApp(QApplication):
                 return
             if 'next_study' in json_data:
                 case = int(json_data['next_study'])
-                if case==1:
+                if case == 1:
                     self.next_study()
                 else:
                     self.prior_study()
@@ -394,10 +413,11 @@ class ImageViewerApp(QApplication):
                 return
             if 'next_image' in json_data:
                 case = int(json_data['next_image'])
-                if case == 1:
-                    self.viewers[self.viewer_index].emit(SIGNAL('next_image'))
-                else:
-                    self.viewers[self.viewer_index].emit(SIGNAL('prior_image'))
+
+                self.viewers[self.viewer_index].emit(SIGNAL('change_image'),
+                                                     case,
+                                                     json_data['x'],
+                                                     json_data['y'])
                 return
 
             if 'request_info' in json_data:
@@ -407,7 +427,7 @@ class ImageViewerApp(QApplication):
                 d['from'] = json_data['from']
                 d['AccNo'] = v.AccNo
                 d['ChartNo'] = v.ChartNo
-                Send_WM_COPYDATA(self.bridge_hwnd, ImageViewerApp.dwData, json.dumps(d))
+                Send_WM_COPYDATA(self.bridge_hwnd, json.dumps(d), ImageViewerApp.dwData)
                 return
 
             # self.study_list_lock.acquire()
@@ -443,7 +463,7 @@ class ImageViewerApp(QApplication):
             pass
         self.preload_threads = []
         for i in range(self.preload_count):
-            th = threading.Timer(i+1, partial(self.preload, i + 1))
+            th = threading.Timer(i + 1, partial(self.preload, i + 1))
             th.start()
             self.preload_threads.append(th)
 
@@ -472,7 +492,7 @@ class ImageViewerApp(QApplication):
             logging.debug('load now')
             # w.load(**s)
             w.emit(SIGNAL('load'), s)
-            SetWindowPos.insertAfter(w.winId(), c.winId())
+            # SetWindowPos.insertAfter(w.winId(), c.winId())
             self.load_thread_lock.release()
 
         w.emit(SIGNAL('show_enable'))
@@ -492,7 +512,7 @@ class ImageViewerApp(QApplication):
         self.AccNo = AccNo
 
         try:
-            map(lambda t:t.terminate(), self.old_hx_threads)
+            map(lambda t: t.terminate(), self.old_hx_threads)
         except:
             pass
         finally:
@@ -524,7 +544,7 @@ class ImageViewerApp(QApplication):
     def hide(self):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         self.show_study_lock.acquire()
-        c=self.viewers[self.viewer_index]
+        c = self.viewers[self.viewer_index]
         c.emit(SIGNAL('hide_disable'))
         self.show_study_lock.release()
 
@@ -557,7 +577,7 @@ class ImageViewerApp(QApplication):
         # SetWindowPos.insertAfter(viewer.winId(), hwndInsertAfter)
 
         # viewer.show()
-        if inc==1:
+        if inc == 1:
             viewer.emit(SIGNAL('show'))
 
         self.load_thread_lock.release()
