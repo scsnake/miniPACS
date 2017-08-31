@@ -2,7 +2,7 @@ import os, glob, sys
 import threading
 from collections import OrderedDict
 from screeninfo import get_monitors
-from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QGraphicsView, QGraphicsScene, QLabel, QPalette, QImage
+from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QGraphicsScene, QLabel, QPalette, QImage
 from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
 from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
 from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL
@@ -306,10 +306,11 @@ class ImageViewer(QMainWindow):
 
     def load_old_hx(self, old_hx):
 
-        self.old_hx_label.setText(old_hx)
-        if old_hx == '':
+        self.old_hx_label.clear()
+        if old_hx.strip() == '':
             self.old_hx_label.hide()
         else:
+            self.old_hx_label.setText(old_hx.strip())
             self.old_hx_label.show()
 
     def whichLabel(self, AccNo='', index=0):
@@ -523,7 +524,7 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.acquire()
         thisStudyInd = self.study_index + 1
         if not thisStudyInd < len(self.study_list):
-            print 'Beyond current study list!'
+            self.showdialog()
             self.show_study_lock.release()
             return
         thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
@@ -547,13 +548,27 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.acquire()
         thisStudyInd = self.study_index - 1
         if thisStudyInd < 0:
-            print 'Beyond current study list!'
+            print 'Beyond first study!'
             self.show_study_lock.release()
             return
         thisViewerInd = self.prior_index(self.viewer_index, self.total_viewer_count)
 
         self.show_study(viewer=thisViewerInd, study=thisStudyInd)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
+
+    def showdialog():
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Information)
+
+        msg.setText("Already last study!\nExit?")
+        msg.setWindowTitle("miniPACS")
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        msg.setDefaultButton(QMessageBox.Ok)
+
+        if msg.exec_()==QMessageBox.Ok:
+            Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
+            sys.exit()
+
 
     def show_study(self, viewer, study):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -679,7 +694,7 @@ def getMyDocPath():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
-    app = ImageViewerApp(sys.argv, getMyDocPath())
+    app = ImageViewerApp(sys.argv, os.path.join(getMyDocPath(), 'feedRIS'))
     # app.load(r'[{"AccNo":"T0173278453", "ChartNo":"4587039", "expected_image_count":[{"T0173278453":2}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
