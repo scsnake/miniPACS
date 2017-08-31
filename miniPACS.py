@@ -6,13 +6,80 @@ from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QGraphicsView, QGr
 from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
 from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
 from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL
-from time import sleep
+from time import sleep, clock
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 import SetWindowPos
 import json
 import logging, inspect
 from functools import partial
+import cv2
+import numpy as np
+import ctypes.wintypes
 
+class ImageLabel(QLabel):
+    def __init__(self, *args):
+        super(ImageLabel, self).__init__(*args)
+        self.mousePressed=False
+        self.mouseMoving = False
+        self.z_pressed = False
+
+        mag_label = QLabel(self)
+        mag_label.setFixedSize(400, 400)
+        mag_label.setStyleSheet('border: 1px solid white;')
+        mag_label.hide()
+        self.mag_label = mag_label
+
+    def mousePressEvent(self, QMouseEvent):
+        if QMouseEvent.button()==Qt.LeftButton:
+            self.mousePressed=True
+            self.mousePressedPosX = QMouseEvent.x()
+            self.mousePressedPosY = QMouseEvent.y()
+
+    def mouseReleaseEvent(self, QMouseEvent):
+        if QMouseEvent.button() == Qt.LeftButton:
+            self.setPixmap(self.original_px)
+            self.mousePressed=False
+
+    def mouseMoveEvent(self, QMouseEvent):
+        if not self.mousePressed and not self.z_pressed:
+            return
+        if self.mouseMoving:
+            return
+        self.mouseMoving=True
+
+        if not self.z_pressed:
+            cl=clock()
+            contrast = self.sigmoid((QMouseEvent.x() - self.mousePressedPosX+0.0)/self.fixedWidth)
+            brightness = self.sigmoid((QMouseEvent.y() - self.mousePressedPosY+0.0)/self.fixedHeight)
+            # print contrast, brightness
+            v = (self.original_image * contrast + brightness)
+            v[v<0]=0
+            v[v>255]=255
+            v=v.astype(np.uint8)
+            im2 = QImage(v.data, self.original_image.shape[1], self.original_image.shape[0],
+                         self.original_image.shape[1], QImage.Format_Indexed8)
+            px2 = QPixmap.fromImage(im2)
+            self.setPixmap(px2.scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio))
+            print clock()-cl
+        else:
+            pass
+        self.mouseMoving=False
+
+    # def keyPressEvent(self, QKeyEvent):
+    #     if QKeyEvent.key()==Qt.Key_Z:
+    #         self.show_mag()
+    #         self.z_pressed=True
+    #
+    # def keyReleaseEvent(self, QKeyEvent):
+    #     if QKeyEvent.key()==Qt.Key_Z:
+    #         self.z_pressed=False
+    #         self.hide_mag()
+    #
+    # def show_mag(self):
+
+
+    def sigmoid(self, x):
+        return 1+x/(1+abs(x))
 
 class ImageViewer(QMainWindow):
     def __init__(self, use_monitor=(1, -1)):
@@ -43,13 +110,16 @@ class ImageViewer(QMainWindow):
             if m.height > w_h:
                 w_h = m.height
 
-            imageLabel = QLabel(self)
+            imageLabel = ImageLabel(self)
             imageLabel.setStyleSheet('background-color: black;')
             imageLabel.setFixedSize(m.width, m.height)
             imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             # imageLabel.setScaledContents(True)
             imageLabel.setGeometry(w_w, m.y, m.width, m.height)
             imageLabel.setAlignment(Qt.AlignCenter)
+            imageLabel.fixedWidth=m.width
+            imageLabel.fixedHeight=m.height
+
 
             countLabel = QLabel(imageLabel)
             countLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
@@ -177,7 +247,7 @@ class ImageViewer(QMainWindow):
     def load(self, study):
 
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        logging.info(study['ChartNo'])
+        logging.debug(study['ChartNo'])
         self.reset()
 
         ChartNo = study['ChartNo']
@@ -214,7 +284,8 @@ class ImageViewer(QMainWindow):
             self.load_lock.acquire()
             for k, image_path in enumerate(glob.glob(os.path.join(self.folder, AccNo + ' *.jpeg'))):
                 if image_path not in self.loaded_image[AccNo]:
-                    self.loaded_image[AccNo][image_path] = QImage(image_path)
+                    # self.loaded_image[AccNo][image_path] = QImage(image_path)
+                    self.loaded_image[AccNo][image_path] = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
                     last_k = k
                     break
             is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[index][AccNo]
@@ -321,20 +392,23 @@ class ImageViewer(QMainWindow):
             if image_path in self.loaded_image[AccNo]:
                 image = self.loaded_image[AccNo][image_path]
             else:
-                image = QImage(image_path)
+                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
                 # self.load_single_image(Acc, image_path, image)
         except:
             self.show_curtain(index=index)
             print('Image %d not loaded!' % image_ind)
             return
-        px = QPixmap.fromImage(image)
+
+        px = QPixmap.fromImage(QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
         w = image_label.width()
         h = image_label.height()
-
-        image_label.setPixmap(px.scaled(w, h, Qt.KeepAspectRatio))
+        scaled=px.scaled(w, h, Qt.KeepAspectRatio)
+        image_label.setPixmap(scaled)
         image_label.setEnabled(True)
         image_label.show()
         image_label.activateWindow()
+        image_label.original_image = image
+        image_label.original_px = scaled
         self.setWindowTitle(image_path)
         self.show_lock.release()
         image_label.curtain_label.hide()
@@ -382,7 +456,7 @@ class ImageViewerApp(QApplication):
         # self.next_study()
 
     def load(self, jsonStr):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         return self.listener(dwData=ImageViewerApp.dwData, lpData=jsonStr)
 
     def listener(self, *args, **kwargs):
@@ -401,6 +475,7 @@ class ImageViewerApp(QApplication):
             #     return
             if 'oldHx' in json_data:
                 self.old_hx_list.update(json_data['oldHx'])
+                # logging.warning(self.old_hx_list)
                 return
             if 'next_study' in json_data:
                 case = int(json_data['next_study'])
@@ -444,7 +519,7 @@ class ImageViewerApp(QApplication):
             return
 
     def next_study(self):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         self.show_study_lock.acquire()
         thisStudyInd = self.study_index + 1
         if not thisStudyInd < len(self.study_list):
@@ -468,7 +543,7 @@ class ImageViewerApp(QApplication):
             self.preload_threads.append(th)
 
     def prior_study(self):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         self.show_study_lock.acquire()
         thisStudyInd = self.study_index - 1
         if thisStudyInd < 0:
@@ -481,7 +556,7 @@ class ImageViewerApp(QApplication):
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
     def show_study(self, viewer, study):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         w = self.viewers[viewer]
         s = self.study_list[study]
         AccNo = s['AccNo']
@@ -489,7 +564,7 @@ class ImageViewerApp(QApplication):
 
         if w.AccNo != AccNo:
             self.load_thread_lock.acquire()
-            logging.debug('load now')
+            logging.info('load now')
             # w.load(**s)
             w.emit(SIGNAL('load'), s)
             # SetWindowPos.insertAfter(w.winId(), c.winId())
@@ -519,9 +594,10 @@ class ImageViewerApp(QApplication):
             th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
             th.start()
             self.old_hx_threads.append(th)
+        Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'activateSimpleRIS':1}), ImageViewerApp.dwData)
 
     def load_old_hx(self, AccNo=None, win=None):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         if AccNo is None:
             AccNo = self.AccNo
         if win is None:
@@ -529,7 +605,7 @@ class ImageViewerApp(QApplication):
         while True:
             if AccNo in self.old_hx_list:
                 old_hx = self.old_hx_list[AccNo]
-                win.old_hx = old_hx
+                win.old_hx = old_hx.strip()
 
                 win.emit(SIGNAL('load_old_hx'), old_hx)
                 # win.old_hx_label.setText(old_hx)
@@ -542,7 +618,7 @@ class ImageViewerApp(QApplication):
                 sleep(0.5)
 
     def hide(self):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         self.show_study_lock.acquire()
         c = self.viewers[self.viewer_index]
         c.emit(SIGNAL('hide_disable'))
@@ -555,7 +631,7 @@ class ImageViewerApp(QApplication):
         return (ind - 1 + total) % total
 
     def preload(self, inc=1):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         self.load_thread_lock.acquire()
 
@@ -579,11 +655,12 @@ class ImageViewerApp(QApplication):
         # viewer.show()
         if inc == 1:
             viewer.emit(SIGNAL('show'))
+        viewer.old_hx=''
 
         self.load_thread_lock.release()
 
     def save_report(self, next=True):
-        logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+        logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         study = self.study_list[self.study_index]
         try:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps(study), ImageViewerApp.dwData)
@@ -592,10 +669,17 @@ class ImageViewerApp(QApplication):
         except:
             return
 
+def getMyDocPath():
+    CSIDL_PERSONAL = 5  # My Documents
+
+    SHGFP_TYPE_CURRENT = 0  # Want current, not default value
+    buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+    ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)
+    return buf.value
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-    app = ImageViewerApp(sys.argv, r'C:\Users\IDI\Documents\feedRIS')
+    logging.basicConfig(level=logging.WARNING)
+    app = ImageViewerApp(sys.argv, getMyDocPath())
     # app.load(r'[{"AccNo":"T0173278453", "ChartNo":"4587039", "expected_image_count":[{"T0173278453":2}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
