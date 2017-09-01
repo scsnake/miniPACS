@@ -16,70 +16,157 @@ import cv2
 import numpy as np
 import ctypes.wintypes
 
+
 class ImageLabel(QLabel):
     def __init__(self, *args):
         super(ImageLabel, self).__init__(*args)
-        self.mousePressed=False
+        self.mousePressed = False
         self.mouseMoving = False
-        self.z_pressed = False
+        self.zooming_mode = False
 
         mag_label = QLabel(self)
         mag_label.setFixedSize(400, 400)
         mag_label.setStyleSheet('border: 1px solid white;')
         mag_label.hide()
         self.mag_label = mag_label
+        self.cal_th = None
+        self.calculating = False
+        self.is_sharp_image = False
+        # self.setMouseTracking(True)
+
+        self.connect(self, SIGNAL('set_pixmap'), self.setPixmap)
+        self.connect(self, SIGNAL('set_pixmap_qimage'), self.set_pixmap_qimage)
+        self.connect(self, SIGNAL('sharp_image'), self.sharp_image)
 
     def mousePressEvent(self, QMouseEvent):
-        if QMouseEvent.button()==Qt.LeftButton:
-            self.mousePressed=True
+        if QMouseEvent.button() == Qt.LeftButton or QMouseEvent.button() == Qt.RightButton:
+            self.mousePressed = QMouseEvent.button()
             self.mousePressedPosX = QMouseEvent.x()
             self.mousePressedPosY = QMouseEvent.y()
+        elif QMouseEvent.button() == Qt.MiddleButton:
+            self.is_sharp_image = not self.is_sharp_image
+            self.emit(SIGNAL('sharp_image'), self.is_sharp_image)
 
     def mouseReleaseEvent(self, QMouseEvent):
-        if QMouseEvent.button() == Qt.LeftButton:
-            self.setPixmap(self.original_px)
-            self.mousePressed=False
+        if QMouseEvent.button() == Qt.LeftButton or QMouseEvent.button() == Qt.RightButton:
+            try:
+                self.cal_th.terminate()
+                self.original_image_processing_th.cancel()
+                self.original_image_processing_th.terminate()
+            except:
+                pass
+            finally:
+                # self.setPixmap(self.original_px)
+                self.emit(SIGNAL('set_pixmap'), self.base_px)
+                self.mousePressed = False
 
     def mouseMoveEvent(self, QMouseEvent):
-        if not self.mousePressed and not self.z_pressed:
+        if not self.mousePressed:
             return
-        if self.mouseMoving:
-            return
-        self.mouseMoving=True
 
-        if not self.z_pressed:
-            cl=clock()
-            contrast = self.sigmoid((QMouseEvent.x() - self.mousePressedPosX+0.0)/self.fixedWidth)
-            brightness = self.sigmoid((QMouseEvent.y() - self.mousePressedPosY+0.0)/self.fixedHeight)
-            # print contrast, brightness
-            v = (self.original_image * contrast + brightness)
-            v[v<0]=0
-            v[v>255]=255
-            v=v.astype(np.uint8)
-            im2 = QImage(v.data, self.original_image.shape[1], self.original_image.shape[0],
-                         self.original_image.shape[1], QImage.Format_Indexed8)
-            px2 = QPixmap.fromImage(im2)
-            self.setPixmap(px2.scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio))
-            print clock()-cl
-        else:
-            pass
-        self.mouseMoving=False
+        if not self.cal_th or not self.cal_th.isAlive():
+            if self.mousePressed == Qt.LeftButton:
+                target = self.cal_brightness_contrast
+            else:
+                target = self.cal_zoomin
+            th = threading.Thread(target=target, args=(QMouseEvent.x(), QMouseEvent.y()))
+            th.start()
+            self.cal_th = th
 
-    # def keyPressEvent(self, QKeyEvent):
-    #     if QKeyEvent.key()==Qt.Key_Z:
-    #         self.show_mag()
-    #         self.z_pressed=True
-    #
-    # def keyReleaseEvent(self, QKeyEvent):
-    #     if QKeyEvent.key()==Qt.Key_Z:
-    #         self.z_pressed=False
-    #         self.hide_mag()
-    #
     # def show_mag(self):
 
+    def sharp_image(self, do_sharpen=True):
+
+        if not do_sharpen:
+            self.base_image = self.original_image
+        else:
+            self.base_image = self.sharpen_image
+        # cl = clock()
+        self.base_px = QPixmap.fromImage(
+            QImage(self.base_image.data, self.base_image.shape[1], self.base_image.shape[0],
+                   self.base_image.shape[1], QImage.Format_Indexed8)) \
+            .scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio)
+        # print clock() - cl
+        self.setPixmap(self.base_px)
+
+
+    def cal_zoomin(self, mouseX, mouseY):
+        ratio = np.float16(2.5)
+
+        x = np.float16(mouseX) / self.fixedWidth
+        y = np.float16(mouseY) / self.fixedHeight
+
+        if x <= 0.5 / ratio:
+            x = 0
+        elif x >= 1 - 0.5 / ratio:
+            x = 1 - 1 / ratio
+        else:
+            x = x - 0.5 / ratio
+
+        if y <= 0.5 / ratio:
+            y = 0
+        elif y >= 1 - 0.5 / ratio:
+            y = 1 - 1 / ratio
+        else:
+            y = y - 0.5 / ratio
+
+        x = int(np.floor(self.base_image.shape[1] * x))
+        y = int(np.floor(self.base_image.shape[0] * y))
+        w = int(np.floor(self.base_image.shape[1] / ratio))
+        h = int(np.floor(self.base_image.shape[0] / ratio))
+
+        v = np.ascontiguousarray(self.base_image[y:(y + h), x:(x + w)])
+        im2 = QImage(v.data, v.shape[1], v.shape[0],
+                     v.shape[1], QImage.Format_Indexed8)
+
+        self.emit(SIGNAL('set_pixmap_qimage'), im2)
+
+    def cal_brightness_contrast(self, mouseX, mouseY, use_downsampled=True):
+        # cl = clock()
+
+        if not use_downsampled:
+            using_image = self.base_image
+        else:
+            using_image = self.downsampled_sharpen_image if self.is_sharp_image else self.downsampled_image
+
+        contrast = self.sigmoid(np.float16(mouseX - self.mousePressedPosX) / self.fixedWidth)
+        brightness = self.sigmoid(np.float16(mouseY - self.mousePressedPosY) / self.fixedHeight)
+        # print contrast, brightness
+        v = (using_image * contrast + brightness)
+        v[v < 0] = 0
+        v[v > 255] = 255
+        v = v.astype(np.uint8)
+        im2 = QImage(v.data, using_image.shape[1], using_image.shape[0],
+                     using_image.shape[1], QImage.Format_Indexed8)
+
+        self.emit(SIGNAL('set_pixmap_qimage'), im2)
+
+        if use_downsampled:
+            try:
+                self.original_image_processing_th.cancel()
+                self.original_image_processing_th.terminate()
+            except:
+                pass
+            finally:
+                th = threading.Timer(0.05, self.cal_brightness_contrast, [mouseX, mouseY, False])
+                th.start()
+                self.original_image_processing_th = th
+
+        # print clock() - cl
+
+    def set_pixmap_qimage(self, im):
+        # self.setPixmap(QPixmap.fromImage(im))
+        self.setPixmap(QPixmap.fromImage(im).scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio))
 
     def sigmoid(self, x):
-        return 1+x/(1+abs(x))
+        return 1 + x / (1 + abs(x))
+
+    def scale_image(self, v):
+        w,h = np.float16(v.shape[0]), np.float16(v.shape[1])
+        if h/w > np.float16(self.fixedHeight)/self.fixedWidth:
+            return cv2.resize(v, ( self.fixedHeight, int(np.round(w*self.fixedHeight/h))))
+        else:
+            return cv2.resize(v, (int(np.round(h * self.fixedWidth / w)), self.fixedWidth))
 
 class ImageViewer(QMainWindow):
     def __init__(self, use_monitor=(1, -1)):
@@ -117,9 +204,8 @@ class ImageViewer(QMainWindow):
             # imageLabel.setScaledContents(True)
             imageLabel.setGeometry(w_w, m.y, m.width, m.height)
             imageLabel.setAlignment(Qt.AlignCenter)
-            imageLabel.fixedWidth=m.width
-            imageLabel.fixedHeight=m.height
-
+            imageLabel.fixedWidth = m.width
+            imageLabel.fixedHeight = m.height
 
             countLabel = QLabel(imageLabel)
             countLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
@@ -143,6 +229,7 @@ class ImageViewer(QMainWindow):
                 oldHxLabel.viewport().setAutoFillBackground(False)
                 oldHxLabel.setGeometry(w_w, m.y + m.height - 200, m.width, 200)
                 oldHxLabel.setFont(QFont('Verdana', 24, QFont.Normal))
+                oldHxLabel.setReadOnly(True)
                 # oldHxLabel.setText('test\ntest\ntest\ntest\ntest\ntest')
                 # oldHxLabel.show()
                 oldHxLabel.hide()
@@ -174,8 +261,24 @@ class ImageViewer(QMainWindow):
         self.connect(self, SIGNAL('next_image'), self.next_image)
         self.connect(self, SIGNAL('prior_image'), self.prior_image)
         self.connect(self, SIGNAL('change_image'), self.change_image)
+        self.connect(self, SIGNAL('hide_count_label'), self.hide_count_label)
 
         # self._define_global_shortcuts()
+
+        # def keyPressEvent(self, QKeyEvent):
+        # if QKeyEvent.key() == Qt.Key_Z:
+        #     image_label = self.image_labels[0]
+        #     image_label.zooming_mode = not image_label.zooming_mode
+        #     if not image_label.zooming_mode:
+        #         image_label.emit(SIGNAL('set_pixmap'), image_label.original_px)
+
+    # def keyReleaseEvent(self, QKeyEvent):
+    #     if QKeyEvent.key()==Qt.Key_Z:
+    #         image_label=self.image_labels[0]
+    #         image_label.emit(SIGNAL('set_pixmap'), image_label.original_px)
+    #         image_label.z_pressed=False
+
+
 
     def show_enable(self):
         self.setEnabled(True)
@@ -305,6 +408,8 @@ class ImageViewer(QMainWindow):
         return image
 
     def load_old_hx(self, old_hx):
+        print self.AccNo
+        print old_hx
 
         self.old_hx_label.clear()
         if old_hx.strip() == '':
@@ -374,6 +479,9 @@ class ImageViewer(QMainWindow):
         curtain_label.show()
         curtain_label.activateWindow()
 
+    def hide_count_label(self, index):
+        self.image_labels[index].count_label.hide()
+
     def show_image(self, image_ind, AccNo='', index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         AccNo, index = self.whichLabel(AccNo, index)
@@ -381,6 +489,15 @@ class ImageViewer(QMainWindow):
         image_label = self.image_labels[index]
         image_label.count_label.setText('%d / %d' % (image_ind + 1,
                                                      self.expected_image_count[index][AccNo]))
+        try:
+            image_label.count_label.hide_label_th.cancel()
+            image_label.count_label.hide_label_th.terminate()
+        except:
+            pass
+        finally:
+            th = threading.Timer(1, lambda i: self.emit(SIGNAL('hide_count_label'), i), [index])
+            th.start()
+            image_label.count_label.hide_label_th = th
 
         try:
             image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
@@ -400,19 +517,36 @@ class ImageViewer(QMainWindow):
             print('Image %d not loaded!' % image_ind)
             return
 
-        px = QPixmap.fromImage(QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
+        self.image_labels[index].curtain_label.hide()
+
+        px = QPixmap.fromImage(
+            QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
         w = image_label.width()
         h = image_label.height()
-        scaled=px.scaled(w, h, Qt.KeepAspectRatio)
-        image_label.setPixmap(scaled)
+        scaled = px.scaled(w, h, Qt.KeepAspectRatio)
+        image_label.emit(SIGNAL('set_pixmap'), scaled)
+        # image_label.setPixmap(scaled)
         image_label.setEnabled(True)
         image_label.show()
         image_label.activateWindow()
-        image_label.original_image = image
-        image_label.original_px = scaled
+
+        threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
         self.setWindowTitle(image_path)
         self.show_lock.release()
         image_label.curtain_label.hide()
+
+    def preprocessing(self, image_label, image, scaled):
+        # cl=clock()
+        image_label.original_image = image
+        image_label.base_image = image
+        image_label.downsampled_image = cv2.resize(image, (0, 0), fx=0.3, fy=0.3)
+        image_label.base_px = scaled
+
+        im = cv2.GaussianBlur(image, (0, 0), 10)
+        cv2.addWeighted(image, 1.5, im, -0.5, 0, im)
+        image_label.sharpen_image = im
+        image_label.downsampled_sharpen_image = cv2.resize(im, (0, 0), fx=0.3, fy=0.3)
+        # print clock()-cl
 
 
 class ImageViewerApp(QApplication):
@@ -537,11 +671,12 @@ class ImageViewerApp(QApplication):
             map(lambda t: t.terminate(), self.preload_threads)
         except:
             pass
-        self.preload_threads = []
-        for i in range(self.preload_count):
-            th = threading.Timer(i + 1, partial(self.preload, i + 1))
-            th.start()
-            self.preload_threads.append(th)
+        finally:
+            self.preload_threads = []
+            for i in range(self.preload_count):
+                th = threading.Timer(i + 1, partial(self.preload, i + 1))
+                th.start()
+                self.preload_threads.append(th)
 
     def prior_study(self):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -565,10 +700,9 @@ class ImageViewerApp(QApplication):
         msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
         msg.setDefaultButton(QMessageBox.Ok)
 
-        if msg.exec_()==QMessageBox.Ok:
+        if msg.exec_() == QMessageBox.Ok:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
             sys.exit()
-
 
     def show_study(self, viewer, study):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -609,7 +743,7 @@ class ImageViewerApp(QApplication):
             th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
             th.start()
             self.old_hx_threads.append(th)
-        Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'activateSimpleRIS':1}), ImageViewerApp.dwData)
+        Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), ImageViewerApp.dwData)
 
     def load_old_hx(self, AccNo=None, win=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -622,7 +756,7 @@ class ImageViewerApp(QApplication):
                 old_hx = self.old_hx_list[AccNo]
                 win.old_hx = old_hx.strip()
 
-                win.emit(SIGNAL('load_old_hx'), old_hx)
+                win.emit(SIGNAL('load_old_hx'), old_hx.strip())
                 # win.old_hx_label.setText(old_hx)
                 # if old_hx == '':
                 #     win.old_hx_label.hide()
@@ -670,7 +804,7 @@ class ImageViewerApp(QApplication):
         # viewer.show()
         if inc == 1:
             viewer.emit(SIGNAL('show'))
-        viewer.old_hx=''
+        viewer.old_hx = ''
 
         self.load_thread_lock.release()
 
@@ -684,6 +818,7 @@ class ImageViewerApp(QApplication):
         except:
             return
 
+
 def getMyDocPath():
     CSIDL_PERSONAL = 5  # My Documents
 
@@ -692,10 +827,11 @@ def getMyDocPath():
     ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)
     return buf.value
 
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
     app = ImageViewerApp(sys.argv, os.path.join(getMyDocPath(), 'feedRIS'))
-    # app.load(r'[{"AccNo":"T0173278453", "ChartNo":"4587039", "expected_image_count":[{"T0173278453":2}]}]')
+    # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
     sys.exit(app.exec_())
