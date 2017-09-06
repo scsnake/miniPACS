@@ -242,8 +242,8 @@ class ImageViewer(QMainWindow):
 
         infoLabel = QLabel(self)
         infoLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
-        infoLabel.setFixedSize(200, 100)
-        infoLabel.setGeometry(50, 150, 200, 100)
+        infoLabel.setFixedSize(250, 100)
+        infoLabel.setGeometry(50, 150, 250, 100)
         infoLabel.setFont(QFont("Verdana", 24, QFont.Normal))
         self.info_label = infoLabel
 
@@ -262,6 +262,7 @@ class ImageViewer(QMainWindow):
         self.connect(self, SIGNAL('prior_image'), self.prior_image)
         self.connect(self, SIGNAL('change_image'), self.change_image)
         self.connect(self, SIGNAL('hide_count_label'), self.hide_count_label)
+        self.connect(self, SIGNAL('hide_old_hx'), self.hide_old_hx)
 
         # self._define_global_shortcuts()
 
@@ -412,11 +413,14 @@ class ImageViewer(QMainWindow):
         print old_hx
 
         self.old_hx_label.clear()
+        self.old_hx_label.hide()
         if old_hx.strip() == '':
             self.old_hx_label.hide()
         else:
             self.old_hx_label.setText(old_hx.strip())
             self.old_hx_label.show()
+    def hide_old_hx(self):
+        self.old_hx_label.hide()
 
     def whichLabel(self, AccNo='', index=0):
         if AccNo != '':
@@ -495,7 +499,7 @@ class ImageViewer(QMainWindow):
         except:
             pass
         finally:
-            th = threading.Timer(1, lambda i: self.emit(SIGNAL('hide_count_label'), i), [index])
+            th = threading.Timer(2, lambda i: self.emit(SIGNAL('hide_count_label'), i), [index])
             th.start()
             image_label.count_label.hide_label_th = th
 
@@ -518,6 +522,7 @@ class ImageViewer(QMainWindow):
             return
 
         self.image_labels[index].curtain_label.hide()
+        self.image_labels[index].count_label.show()
 
         px = QPixmap.fromImage(
             QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
@@ -587,6 +592,8 @@ class ImageViewerApp(QApplication):
         self.oldHx_label = oldHxLabel
 
         self.connect(self, SIGNAL('show_study'), self.show_study)
+        self.connect(self, SIGNAL('activate_main'), self.activate_main)
+        self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
         # self.next_study()
 
@@ -630,6 +637,10 @@ class ImageViewerApp(QApplication):
                                                      json_data['y'])
                 return
 
+            if 'activate_main' in json_data:
+                self.emit(SIGNAL('activate_main'))
+                return
+
             if 'request_info' in json_data:
                 v = self.viewers[self.viewer_index]
                 d = {}
@@ -658,7 +669,7 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.acquire()
         thisStudyInd = self.study_index + 1
         if not thisStudyInd < len(self.study_list):
-            self.showdialog()
+            self.emit(SIGNAL('show_dialog'))
             self.show_study_lock.release()
             return
         thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
@@ -691,7 +702,7 @@ class ImageViewerApp(QApplication):
         self.show_study(viewer=thisViewerInd, study=thisStudyInd)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
-    def showdialog():
+    def showdialog(self):
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Information)
 
@@ -719,6 +730,7 @@ class ImageViewerApp(QApplication):
             # SetWindowPos.insertAfter(w.winId(), c.winId())
             self.load_thread_lock.release()
 
+        w.emit(SIGNAL('hide_old_hx'))
         w.emit(SIGNAL('show_enable'))
         # w.setEnabled(True)
         # w.setWindowFlags(Qt.Widget | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowStaysOnTopHint)
@@ -817,6 +829,9 @@ class ImageViewerApp(QApplication):
                 self.next_study()
         except:
             return
+
+    def activate_main(self):
+        self.viewers[self.viewer_index].emit(SIGNAL('show_enable'))
 
 
 def getMyDocPath():
