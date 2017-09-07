@@ -285,7 +285,7 @@ class ImageViewer(QMainWindow):
         self.setEnabled(True)
         self.setWindowFlags(Qt.Widget | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowStaysOnTopHint)
         self.show()
-        self.activateWindow()
+        # self.activateWindow()
 
     def hide_disable(self):
         self.hide()
@@ -575,6 +575,7 @@ class ImageViewerApp(QApplication):
         self.old_hx_list = {}
         self.AccNo = ''
         self.old_hx_threads = []
+        self.fast_mode=True
 
         if self.total_viewer_count > 2:
             self.preload_count = 2
@@ -702,7 +703,7 @@ class ImageViewerApp(QApplication):
         self.show_study(viewer=thisViewerInd, study=thisStudyInd)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
-    def showdialog(self):
+    def show_dialog(self):
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Information)
 
@@ -747,15 +748,17 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.release()
         self.AccNo = AccNo
 
-        try:
-            map(lambda t: t.terminate(), self.old_hx_threads)
-        except:
-            pass
-        finally:
-            th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
-            th.start()
-            self.old_hx_threads.append(th)
-        Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), ImageViewerApp.dwData)
+        if not self.fast_mode:
+            try:
+                map(lambda t: t.terminate(), self.old_hx_threads)
+            except:
+                pass
+            finally:
+                th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
+                th.start()
+                self.old_hx_threads.append(th)
+
+        threading.Timer(2.0, Send_WM_COPYDATA, [self.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), ImageViewerApp.dwData]).start()
 
     def load_old_hx(self, AccNo=None, win=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -814,8 +817,8 @@ class ImageViewerApp(QApplication):
         # SetWindowPos.insertAfter(viewer.winId(), hwndInsertAfter)
 
         # viewer.show()
-        if inc == 1:
-            viewer.emit(SIGNAL('show'))
+        # if inc == 1:
+        #     viewer.emit(SIGNAL('show'))
         viewer.old_hx = ''
 
         self.load_thread_lock.release()
