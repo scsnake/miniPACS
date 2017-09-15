@@ -5,7 +5,7 @@ from screeninfo import get_monitors
 from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QGraphicsScene, QLabel, QPalette, QImage
 from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
 from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
-from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL
+from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL, QCoreApplication
 from time import sleep, clock
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 import SetWindowPos
@@ -349,6 +349,7 @@ class ImageViewer(QMainWindow):
         self.AccNo = ''
         self.ChartNo = ''
         self.timers = []
+        self.preprocessed=[]
 
     def load(self, study):
 
@@ -486,7 +487,7 @@ class ImageViewer(QMainWindow):
             curtain_label = self.image_labels[index].curtain_label
         curtain_label.raise_()
         curtain_label.show()
-        curtain_label.activateWindow()
+        # curtain_label.activateWindow()
 
     def hide_count_label(self, index):
         self.image_labels[index].count_label.hide()
@@ -515,7 +516,7 @@ class ImageViewer(QMainWindow):
             image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
         except:
             image_label.clear()
-            self.show_curtain(index=index)
+            # self.show_curtain(index=index)
             print('Image %d not found!' % image_ind)
             threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
             return
@@ -528,7 +529,7 @@ class ImageViewer(QMainWindow):
                 # self.load_single_image(Acc, image_path, image)
         except:
             image_label.clear()
-            self.show_curtain(index=index)
+            # self.show_curtain(index=index)
             print('Image %d not loaded!' % image_ind)
             threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
             return
@@ -537,6 +538,8 @@ class ImageViewer(QMainWindow):
         self.image_labels[index].count_label.show()
         self.info_label.show()
 
+
+        #TODO: keep preprocessed data according to image_ind, not image_label
         px = QPixmap.fromImage(
             QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
         w = image_label.width()
@@ -736,7 +739,6 @@ class ImageViewerApp(QApplication):
 
         if msg.exec_() == QMessageBox.Ok:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
-            self.quit()
 
     def show_study(self, viewer, study):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
