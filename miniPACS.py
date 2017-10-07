@@ -686,7 +686,7 @@ class ImageViewerApp(QApplication):
 
         if from_ind is not None:
             from_ind = int(from_ind)
-            self.study_index = from_ind - 1
+            self.study_index = from_ind -1
             if not from_ind in self.study_list:
                 threading.Timer(0.5, self.next_study, [from_ind]).start()
                 return
