@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os, glob, sys
 import threading
 from collections import OrderedDict
@@ -5,7 +7,7 @@ from screeninfo import get_monitors
 from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QGraphicsScene, QLabel, QPalette, QImage
 from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
 from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
-from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL, QCoreApplication
+from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL, QCoreApplication, QString
 from time import sleep, clock
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 import SetWindowPos
@@ -168,6 +170,68 @@ class ImageLabel(QLabel):
             return cv2.resize(v, (int(np.round(h * self.fixedWidth / w)), self.fixedWidth))
 
 
+class ProgressWin(QMainWindow):
+    def __init__(self, app=None):
+        super(ProgressWin, self).__init__()
+        self.app = app
+        self.total_count = 0
+        self.read_count = 0
+        self.read_time = []
+        self.read_time_sum = 0
+        self.read_time_mean = 0
+        self.estimated_time_remaining = 0
+        self.pTick = 0
+
+        progressLabel = QLabel(self)
+        progressLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
+        progressLabel.setFixedSize(250, 120)
+        progressLabel.setGeometry(0,0, 250, 120)
+        progressLabel.setGeometry(0, 0, 0, 0)
+        progressLabel.setFont(QFont("Verdana", 24, QFont.Normal))
+        self.progress_label = progressLabel
+
+        self.setFixedSize(250,120)
+        self.move(self.app.x+50, self.app.h - 150)
+        self.setStyleSheet('background-color: transparent;')
+
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+
+        self.connect(self, SIGNAL('update_text'), self.update_text)
+        self.connect(self, SIGNAL('show'), self.show)
+
+    def next(self):
+        cl = clock()
+        t = (cl - self.pTick)*1.0
+        self.read_time.append(t)
+        self.read_time_sum += t
+        self.read_count += 1
+        m = self.read_time_sum * 1.0 / self.read_count
+        self.read_time_mean = m
+        sd = (sum([(i - m) ** 2 for i in self.read_time]) / self.read_count) ** 0.5
+        self.read_time_sd = sd
+        etr = int((self.total_count - self.read_count) * self.read_time_mean)
+        if etr<60:
+            self.estimated_time_remaining = '%d s' % (etr, )
+        else:
+            s = etr%60
+            m = int((etr-s)/60)
+            self.estimated_time_remaining = '%dm %ds' % (m, s)
+        self.emit(SIGNAL('update_text'))
+
+
+    def update_text(self):
+        s= ('%d / %d\n%.1f ± %.1f\nETR: %s' % (self.read_count+1
+                                                                , self.total_count
+                                                                , self.read_time_mean
+                                                                , self.read_time_sd
+                                                                , self.estimated_time_remaining))
+
+        self.progress_label.setText(QString.fromUtf8(s))
+        # print s.decode('utf-8')
+
+    def show_self(self):
+        self.show()
+
 class ImageViewer(QMainWindow):
     def __init__(self, use_monitor=(1, -1), app=None):
         '''
@@ -180,7 +244,7 @@ class ImageViewer(QMainWindow):
         self.show_lock = threading.Lock()
         self.setStyleSheet('background-color: black;')
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
-        self.preloading_AccNo=''
+        self.preloading_AccNo = ''
         self.app = app
         self.reset()
 
@@ -192,6 +256,9 @@ class ImageViewer(QMainWindow):
                 continue
             if i == use_monitor[0]:
                 w_x, w_y = m.x, m.y
+                self.app.x = m.x
+                self.app.y = m.y
+                self.app.h = m.height
 
             tmp_i += 1
 
@@ -349,7 +416,7 @@ class ImageViewer(QMainWindow):
         self.AccNo = ''
         self.ChartNo = ''
         self.timers = []
-        self.preprocessed=[]
+        self.preprocessed = []
 
     def load(self, study):
 
@@ -538,8 +605,7 @@ class ImageViewer(QMainWindow):
         self.image_labels[index].count_label.show()
         self.info_label.show()
 
-
-        #TODO: keep preprocessed data according to image_ind, not image_label
+        # TODO: keep preprocessed data according to image_ind, not image_label
         px = QPixmap.fromImage(
             QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
         w = image_label.width()
@@ -594,6 +660,7 @@ class ImageViewerApp(QApplication):
         self.old_hx_threads = []
         self.fast_mode = False
         self.total_study_count = 0
+        self.x = self.y = self.h = 0
 
         if self.total_viewer_count > 2:
             self.preload_count = self.total_viewer_count - 2
@@ -604,6 +671,8 @@ class ImageViewerApp(QApplication):
 
         for _ in range(totalViewer):
             self.viewers.append(ImageViewer(app=self))
+
+        self.progressWin = ProgressWin(app=self)
 
         oldHxLabel = QLabel()
         oldHxLabel.setGeometry(0, 0, 0, 0)
@@ -661,6 +730,7 @@ class ImageViewerApp(QApplication):
 
             elif 'total_study_count' in json_data:
                 self.total_study_count = int(json_data['total_study_count'])
+                self.progressWin.total_count = self.total_study_count
             elif 'request_info' in json_data:
                 v = self.viewers[self.viewer_index]
                 d = {}
@@ -671,6 +741,8 @@ class ImageViewerApp(QApplication):
                 Send_WM_COPYDATA(self.bridge_hwnd, json.dumps(d), ImageViewerApp.dwData)
                 if json_data['from'] == 'open_impax':
                     self.emit(SIGNAL('hide_all'))
+                elif json_data['from'] == 'sendReport':
+                    self.progressWin.next()
             elif 'fast_mode' in json_data:
                 self.fast_mode = bool(json_data['fast_mode'])
             elif 'start_from' in json_data:
@@ -684,23 +756,31 @@ class ImageViewerApp(QApplication):
     def next_study(self, from_ind=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
-        if from_ind is not None:
-            from_ind = int(from_ind)
-            self.study_index = from_ind -1
-            if not from_ind in self.study_list:
-                threading.Timer(0.5, self.next_study, [from_ind]).start()
-                return
+
+            # if not from_ind in self.study_list:
+            #     threading.Timer(0.5, self.next_study, [from_ind]).start()
+            #     return
 
         self.show_study_lock.acquire()
-        thisStudyInd = self.study_index + 1
+        if from_ind is not None :
+            from_ind = int(from_ind)
+            # self.study_index = from_ind - 1
+            thisStudyInd=from_ind
+        else:
+            thisStudyInd = self.study_index + 1
         if not thisStudyInd < self.total_study_count:
             self.show_study_lock.release()
             self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
             self.emit(SIGNAL('show_dialog'))
             return
+        if not thisStudyInd in self.study_list:
+            threading.Timer(0.5, self.next_study, [from_ind]).start()
+            self.show_study_lock.release()
+            return
+
         thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
 
-        self.show_study(viewer=thisViewerInd, study=thisStudyInd)
+        self.show_study(viewer=thisViewerInd, study=thisStudyInd, from_next=True)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
         try:
@@ -740,7 +820,7 @@ class ImageViewerApp(QApplication):
         if msg.exec_() == QMessageBox.Ok:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
 
-    def show_study(self, viewer, study):
+    def show_study(self, viewer, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         viewer = int(viewer)
         study = int(study)
@@ -749,11 +829,11 @@ class ImageViewerApp(QApplication):
         AccNo = s['AccNo']
         c = self.viewers[self.viewer_index]
 
-        if w.AccNo != AccNo and w.preloading_AccNo!=AccNo:
+        if w.AccNo != AccNo and w.preloading_AccNo != AccNo:
             # self.load_thread_lock.acquire()
             logging.info('load now')
             # w.load(**s)
-            w.preloading_AccNo=AccNo
+            w.preloading_AccNo = AccNo
             w.emit(SIGNAL('load'), s)
             # SetWindowPos.insertAfter(w.winId(), c.winId())
             # self.load_thread_lock.release()
@@ -776,6 +856,10 @@ class ImageViewerApp(QApplication):
 
         self.viewer_index = viewer
         self.study_index = study
+        # print str(viewer) +','+str(study)
+        if from_next:
+            self.progressWin.pTick = clock()
+            self.progressWin.emit(SIGNAL('show'))
         self.show_study_lock.release()
         self.AccNo = AccNo
 
@@ -845,15 +929,15 @@ class ImageViewerApp(QApplication):
         if viewer.AccNo != study['AccNo'] and viewer.preloading_AccNo != study['AccNo']:
             # viewer.load(**study)
             viewer.emit(SIGNAL('load'), study)
-            viewer.preloading_AccNo=study['AccNo']
-            viewer.old_hx=''
+            viewer.preloading_AccNo = study['AccNo']
+            viewer.old_hx = ''
 
-        # SetWindowPos.insertAfter(viewer.winId(), hwndInsertAfter)
+            # SetWindowPos.insertAfter(viewer.winId(), hwndInsertAfter)
 
-        # viewer.show()
-        # if inc == 1:
-        #     viewer.emit(SIGNAL('show'))
-        # self.load_thread_lock.release()
+            # viewer.show()
+            # if inc == 1:
+            #     viewer.emit(SIGNAL('show'))
+            # self.load_thread_lock.release()
 
     def save_report(self, next=True):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
