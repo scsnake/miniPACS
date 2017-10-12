@@ -19,9 +19,9 @@ import numpy as np
 import ctypes.wintypes
 
 
-class ImageLabel(QLabel):
+class ViewPort(QLabel):
     def __init__(self, *args):
-        super(ImageLabel, self).__init__(*args)
+        super(ViewPort, self).__init__(*args)
         self.mousePressed = False
         self.mouseMoving = False
         self.zooming_mode = False
@@ -230,13 +230,59 @@ class ProgressWin(QWidget):
     def show_self(self):
         self.show()
 
+class Frame():
+    def __init__(self, frame=None, ratio=None, usableHW=(0,0), show=False):
+        self.w, self.h = usableHW
 
-class StudyViewer(QMainWindow):
+        if ratio is not None:
+            self.setRatio(ratio)
+        elif frame is not None:
+            self.setFrame(frame)
+        else:
+            self.ratio=[]
+
+        self.viewports=[]
+
+        self.update_pos()
+
+        if show:
+            self.show()
+
+    def setFrame(self, ratio):
+        if ratio is None
+            return []
+        ret= []
+        cols = len(ratio)
+        w=1.0/cols
+        for ind, sc in enumerate(ratio):
+            x,y=ind*0.1/cols, 0
+
+            c, r = sc[0], sc[1]
+            ww, h = w/c, 1.0/r
+            for i in range(c):
+                for j in range(r):
+                    ret.append([x+i*ww, y+j*h, ww, h])
+        self.ratio=ret
+
+    def setRatio(self, ratio):
+        self.ratio= ratio
+
+    def update_pos(self):
+        for i, ratio in enumerate(self.ratio):
+            if not i < len(self.viewports):
+                vp=ViewPort()
+                self.viewports.append(vp)
+            self.viewports[i].setGeometry(*ratio)
+            self.viewports[i].move(ratio[0], ratio[1])
+
+    def get_viewport(self, which):
+        return self.viewports[which]
+
+
+
+class MainViewer(QMainWindow):
     def __init__(self,  app=None):
-        '''
-        :param use_monitor: tuple, default with second to last monitor, use (None, None) for all monitors
-        '''
-        super(StudyViewer, self).__init__()
+        super(MainViewer, self).__init__()
 
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name)
         self.load_lock = threading.Lock()
@@ -246,12 +292,10 @@ class StudyViewer(QMainWindow):
         self.preloading_AccNo = ''
         self.app = app
         self.reset()
-        use_monitor = (1, -1)
-
-        w_w = w_h = w_x = w_y = 0
-        tmp_i = 0
-        self.series_labels = []
+        )
         self.monitors = sorted(get_monitors(), key=lambda m: m.x)
+
+
         # for i, m in enumerate(sorted(get_monitors(), key=lambda m: m.x)):
         for tmp_i in range(3):
             if tmp_i==0:
@@ -266,7 +310,7 @@ class StudyViewer(QMainWindow):
                 w_y+=w_h
 
 
-            imageLabel = ImageLabel(self)
+            imageLabel = ViewPort(self)
             imageLabel.setStyleSheet('background-color: black;')
             # imageLabel.setFixedSize(m.width, m.height)
             # imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -382,6 +426,7 @@ class StudyViewer(QMainWindow):
         self.ChartNo = ''
         self.timers = []
         self.preprocessed = []
+        self.frames= [[0,0,0.5,1], [0.5,0,0.5,0.5], [0.5,0.5,0.5,0.5]]
 
     def load(self, study):
 
@@ -635,7 +680,7 @@ class ImageViewerApp(QApplication):
             self.preload_count = 0
 
         for _ in range(totalViewer):
-            self.viewers.append(StudyViewer(app=self))
+            self.viewers.append(MainViewer(app=self))
 
         self.progressWin = ProgressWin(app=self)
 
