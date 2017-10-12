@@ -231,12 +231,12 @@ class ProgressWin(QWidget):
         self.show()
 
 
-class ImageViewer(QMainWindow):
-    def __init__(self, use_monitor=(1, -1), app=None):
+class StudyViewer(QMainWindow):
+    def __init__(self,  app=None):
         '''
         :param use_monitor: tuple, default with second to last monitor, use (None, None) for all monitors
         '''
-        super(ImageViewer, self).__init__()
+        super(StudyViewer, self).__init__()
 
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name)
         self.load_lock = threading.Lock()
@@ -246,76 +246,42 @@ class ImageViewer(QMainWindow):
         self.preloading_AccNo = ''
         self.app = app
         self.reset()
+        use_monitor = (1, -1)
 
         w_w = w_h = w_x = w_y = 0
         tmp_i = 0
-        self.image_labels = []
-        for i, m in enumerate(sorted(get_monitors(), key=lambda m: m.x)):
-            if i < use_monitor[0]:
-                continue
-            if i == use_monitor[0]:
-                w_x, w_y = m.x, m.y
-                self.app.x = m.x
-                self.app.y = m.y
-                self.app.h = m.height
+        self.series_labels = []
+        self.monitors = sorted(get_monitors(), key=lambda m: m.x)
+        # for i, m in enumerate(sorted(get_monitors(), key=lambda m: m.x)):
+        for tmp_i in range(3):
+            if tmp_i==0:
+                mon=self.monitors[1]
+                w_w, w_h= mon.width, mon.
+            elif tmp_i==1:
+                mon=self.monitors[2]
+                w_x+=w_w
+                w_h = int(mon.height/2)
+                w_w, w_y = mon.width, mon.y
+            elif tmp_i ==2:
+                w_y+=w_h
 
-            tmp_i += 1
-
-            if m.height > w_h:
-                w_h = m.height
 
             imageLabel = ImageLabel(self)
             imageLabel.setStyleSheet('background-color: black;')
-            imageLabel.setFixedSize(m.width, m.height)
-            imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            # imageLabel.setFixedSize(m.width, m.height)
+            # imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             # imageLabel.setScaledContents(True)
-            imageLabel.setGeometry(w_w, m.y, m.width, m.height)
+            imageLabel.setGeometry(w_x, w_y, w_w, w_h)
             imageLabel.setAlignment(Qt.AlignCenter)
-            imageLabel.fixedWidth = m.width
-            imageLabel.fixedHeight = m.height
+            # imageLabel.fixedWidth = m.width
+            # imageLabel.fixedHeight = m.height
 
-            countLabel = QLabel(imageLabel)
-            countLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
-            countLabel.setFixedSize(200, 100)
-            countLabel.setGeometry(50, 50, 250, 100)
-            countLabel.setFont(QFont("Verdana", 50, QFont.Normal))
+            self.series_labels.append(imageLabel)
 
-            curtainLabel = QLabel(imageLabel)
-            curtainLabel.setStyleSheet('background-color: rgba(0,0,0,100); ')
-            curtainLabel.setFixedSize(m.width, m.height)
-            curtainLabel.setGeometry(w_w, m.y, m.width, m.height)
-            curtainLabel.hide()
-
-            imageLabel.count_label = countLabel
-            imageLabel.curtain_label = curtainLabel
-            self.image_labels.append(imageLabel)
-
-            if tmp_i == 2:
-                oldHxLabel = QTextEdit(self)
-                oldHxLabel.setStyleSheet('background-color: rgb(0,0,0,50); color: rgb(255,255,255,200); ')
-                oldHxLabel.viewport().setAutoFillBackground(False)
-                oldHxLabel.setGeometry(w_w, m.y + m.height - 200, m.width, 200)
-                oldHxLabel.setFont(QFont('Verdana', 24, QFont.Normal))
-                oldHxLabel.setReadOnly(True)
-                # oldHxLabel.setText('test\ntest\ntest\ntest\ntest\ntest')
-                # oldHxLabel.show()
-                oldHxLabel.hide()
-                self.old_hx_label = oldHxLabel
-
-            w_w += m.width
-
-            if i == use_monitor[1]:
-                break
-
-        infoLabel = QLabel(self)
-        infoLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
-        infoLabel.setFixedSize(250, 100)
-        infoLabel.setGeometry(50, 150, 250, 100)
-        infoLabel.setFont(QFont("Verdana", 24, QFont.Normal))
-        self.info_label = infoLabel
-
-        self.setFixedSize(w_w, w_h)
-        self.move(w_x, w_y)
+        self.setGeometry(self.monitors[1].x,
+                         self.monitors[1].y,
+                         self.monitors[1].width + self.monitors[2].width,
+                         self.monitors[1].height)
         self.hide()
         self.setEnabled(False)
 
@@ -401,8 +367,8 @@ class ImageViewer(QMainWindow):
     def reset(self):
         try:
             map(lambda x: x.terminate(), self.load_threads)
-            map(lambda x: x.clear(), self.image_labels)
-            map(lambda x: x.count_label.setText(''), self.image_labels)
+            map(lambda x: x.clear(), self.series_labels)
+            map(lambda x: x.count_label.setText(''), self.series_labels)
         except:
             pass
         self.old_hx = ''
@@ -442,7 +408,7 @@ class ImageViewer(QMainWindow):
             if len(d.keys()) < 1:
                 continue
             acc, image_count = d.keys()[0], d.values()[0]
-            if i >= len(self.image_labels):
+            if i >= len(self.series_labels):
                 break
             self.loaded_image[acc] = {}
             self.ind[acc] = ''
@@ -507,7 +473,7 @@ class ImageViewer(QMainWindow):
         g = self.geometry()
         mouseX -= g.left()
         mouseY -= g.top()
-        for i, image_label in enumerate(self.image_labels):
+        for i, image_label in enumerate(self.series_labels):
             if image_label.geometry().contains(mouseX, mouseY):
                 index = i
                 break
@@ -550,22 +516,22 @@ class ImageViewer(QMainWindow):
     def show_curtain(self, index=0, curtain_label=None):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         if curtain_label is None:
-            curtain_label = self.image_labels[index].curtain_label
+            curtain_label = self.series_labels[index].curtain_label
         curtain_label.raise_()
         curtain_label.show()
         # curtain_label.activateWindow()
 
     def hide_count_label(self, index):
-        self.image_labels[index].count_label.hide()
+        self.series_labels[index].count_label.hide()
 
     def show_count_label(self, index):
-        self.image_labels[index].count_label.show()
+        self.series_labels[index].count_label.show()
 
     def show_image(self, image_ind, AccNo='', index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         AccNo, index = self.whichLabel(AccNo, index)
 
-        image_label = self.image_labels[index]
+        image_label = self.series_labels[index]
         image_label.count_label.setText('%d / %d' % (image_ind + 1,
                                                      self.expected_image_count[index][AccNo]))
         try:
@@ -600,8 +566,8 @@ class ImageViewer(QMainWindow):
             threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
             return
 
-        self.image_labels[index].curtain_label.hide()
-        self.image_labels[index].count_label.show()
+        self.series_labels[index].curtain_label.hide()
+        self.series_labels[index].count_label.show()
         self.info_label.show()
 
         # TODO: keep preprocessed data according to image_ind, not image_label
@@ -669,7 +635,7 @@ class ImageViewerApp(QApplication):
             self.preload_count = 0
 
         for _ in range(totalViewer):
-            self.viewers.append(ImageViewer(app=self))
+            self.viewers.append(StudyViewer(app=self))
 
         self.progressWin = ProgressWin(app=self)
 
@@ -684,7 +650,15 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
+        self.base_dir = 'E:\Nodule Detection\case CT'
+        self.load_local_dir()
         # self.next_study()
+
+    def load_local_dir(self):
+        for study in os.listdir(self.base_dir):
+            for series in os.listdir(os.path.join(self.base_dir, study)):
+                for images in sorted(glob.glob(os.path.join(self.base_dir, study, series, '*.dcm'))):
+                    print images
 
     def load(self, jsonStr):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
