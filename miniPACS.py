@@ -170,7 +170,7 @@ class ImageLabel(QLabel):
             return cv2.resize(v, (int(np.round(h * self.fixedWidth / w)), self.fixedWidth))
 
 
-class ProgressWin(QMainWindow):
+class ProgressWin(QWidget):
     def __init__(self, app=None):
         super(ProgressWin, self).__init__()
         self.app = app
@@ -185,23 +185,22 @@ class ProgressWin(QMainWindow):
         progressLabel = QLabel(self)
         progressLabel.setStyleSheet('background-color: transparent; color: rgba(255,255,255,100); ')
         progressLabel.setFixedSize(250, 120)
-        progressLabel.setGeometry(0,0, 250, 120)
+        progressLabel.setGeometry(0, 0, 250, 120)
         progressLabel.setGeometry(0, 0, 0, 0)
         progressLabel.setFont(QFont("Verdana", 24, QFont.Normal))
         self.progress_label = progressLabel
 
-        self.setFixedSize(250,120)
-        self.move(self.app.x+50, self.app.h - 150)
-        self.setStyleSheet('background-color: transparent;')
+        self.setGeometry(self.app.x + 50, self.app.h - 150, 250, 120)
 
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.connect(self, SIGNAL('update_text'), self.update_text)
         self.connect(self, SIGNAL('show'), self.show)
 
-    def next(self):
+    def next_study(self):
         cl = clock()
-        t = (cl - self.pTick)*1.0
+        t = (cl - self.pTick) * 1.0
         self.read_time.append(t)
         self.read_time_sum += t
         self.read_count += 1
@@ -210,27 +209,27 @@ class ProgressWin(QMainWindow):
         sd = (sum([(i - m) ** 2 for i in self.read_time]) / self.read_count) ** 0.5
         self.read_time_sd = sd
         etr = int((self.total_count - self.read_count) * self.read_time_mean)
-        if etr<60:
-            self.estimated_time_remaining = '%d s' % (etr, )
+        if etr < 60:
+            self.estimated_time_remaining = '%d s' % (etr,)
         else:
-            s = etr%60
-            m = int((etr-s)/60)
+            s = etr % 60
+            m = int((etr - s) / 60)
             self.estimated_time_remaining = '%dm %ds' % (m, s)
         self.emit(SIGNAL('update_text'))
 
-
     def update_text(self):
-        s= ('%d / %d\n%.1f ± %.1f\nETR: %s' % (self.read_count+1
-                                                                , self.total_count
-                                                                , self.read_time_mean
-                                                                , self.read_time_sd
-                                                                , self.estimated_time_remaining))
+        s = ('%d / %d\n%.1f ± %.1f\nETR: %s' % (self.read_count + 1
+                                                , self.total_count
+                                                , self.read_time_mean
+                                                , self.read_time_sd
+                                                , self.estimated_time_remaining))
 
         self.progress_label.setText(QString.fromUtf8(s))
         # print s.decode('utf-8')
 
     def show_self(self):
         self.show()
+
 
 class ImageViewer(QMainWindow):
     def __init__(self, use_monitor=(1, -1), app=None):
@@ -742,7 +741,7 @@ class ImageViewerApp(QApplication):
                 if json_data['from'] == 'open_impax':
                     self.emit(SIGNAL('hide_all'))
                 elif json_data['from'] == 'sendReport':
-                    self.progressWin.next()
+                    self.progressWin.next_study()
             elif 'fast_mode' in json_data:
                 self.fast_mode = bool(json_data['fast_mode'])
             elif 'start_from' in json_data:
@@ -756,16 +755,15 @@ class ImageViewerApp(QApplication):
     def next_study(self, from_ind=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
-
-            # if not from_ind in self.study_list:
-            #     threading.Timer(0.5, self.next_study, [from_ind]).start()
-            #     return
+        # if not from_ind in self.study_list:
+        #     threading.Timer(0.5, self.next_study, [from_ind]).start()
+        #     return
 
         self.show_study_lock.acquire()
-        if from_ind is not None :
+        if from_ind is not None:
             from_ind = int(from_ind)
             # self.study_index = from_ind - 1
-            thisStudyInd=from_ind
+            thisStudyInd = from_ind
         else:
             thisStudyInd = self.study_index + 1
         if not thisStudyInd < self.total_study_count:
