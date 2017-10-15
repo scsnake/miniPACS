@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import codecs
 import ctypes.wintypes
 import glob
 import inspect
@@ -59,10 +60,14 @@ class ViewPort(QLabel):
 
     def keyPressEvent(self, event):
         k = event.key()
-        if k == Qt.Key_Down or k == Qt.Key_PageDown:
+        if k == Qt.Key_Down:
             self.parent.emit(SIGNAL('next_image'), self.number)
-        elif k == Qt.Key_Up or k == Qt.Key_PageUp:
+        elif k == Qt.Key_Up:
             self.parent.emit(SIGNAL('prior_image'), self.number)
+        elif k == Qt.Key_PageDown:
+            self.parent.app.emit(SIGNAL('next_study'))
+        elif k == Qt.Key_PageUp:
+            self.parent.app.emit(SIGNAL('prior_study'))
 
     def mousePressEvent(self, QMouseEvent):
         self.setFocus()
@@ -70,7 +75,7 @@ class ViewPort(QLabel):
         if QMouseEvent.button() == Qt.LeftButton:
             point = self.mapToGlobal(QMouseEvent.pos())
 
-            if QApplication.keyboardModifiers() == Qt.ControlModifier:
+            if QApplication.keyboardModifiers() == Qt.ShiftModifier:
                 self.parent.emit(SIGNAL('getCoord'), point.x(), point.y(), self.number)
             else:
                 self.parent.emit(SIGNAL('getCoord'), point.x(), point.y(), self.number, True)
@@ -291,7 +296,7 @@ class Frame():
         cols = len(ratio)
         w = 1.0 / cols
         for ind, sc in enumerate(ratio):
-            x, y = ind * 0.1 / cols, 0
+            x, y = ind * 1.0 / cols, 0
 
             c, r = sc[0], sc[1]
             ww, h = w / c, 1.0 / r
@@ -317,6 +322,8 @@ class Frame():
                                           ratio[2] * 1.0 * self.w,
                                           ratio[3] * 1.0 * self.h)
             self.viewports[i].number = i
+            # self.viewports[i].setStyleSheet('color: white;')
+            # self.viewports[i].setText(str(i))
 
             if show:
                 self.viewports[i].show()
@@ -423,10 +430,18 @@ class MainViewer(QMainWindow):
         coord = self.mousePos2Coord((mousePosX, mousePosY),
                                     (point.x(), point.y(), geo.width(), geo.height()),
                                     (image.shape[1], image.shape[0]))
-        x, y = round(coord[0] * image.shape[1]), round(coord[1] * image.shape[0])
+        x, y = int(round(coord[0] * image.shape[1])), int(round(coord[1] * image.shape[0]))
+
 
         if showSagCor:
             self.localize(x, y)
+        else:
+            # print '%d, %d, %d' % (x, y, vp.image_ind+1)
+            self.save_nodule(x,y,vp.image_ind+1)
+
+    def save_nodule(self, x,y,z):
+        with codecs.open(os.path.join(self.app.base_dir, 'output.txt'), 'w', 'utf-8') as text_file:
+            text_file.write('%s,%d,%d,%d\n' % (self.study_id, x,y,z))
 
     def mousePos2Coord(self, mousePos=(0, 0), viewport_dim=(0, 0, 0, 0), image_dim=(0, 0)):
         x, y, w, h = viewport_dim
@@ -457,34 +472,87 @@ class MainViewer(QMainWindow):
 
         return (coord0, coord1)
 
-    def localize(self, x, y):
-        z_sp, xy_sp = self.dicom_info.SpacingBetweenSlices, self.dicom_info.PixelSpacing[0]
+    def getRange(self, coord, dim, size):
 
-        if z_sp > xy_sp:
-            factor_z, factor_xy = z_sp * 1.0 / xy_sp, 1
-        elif xy_sp > z_sp:
-            factor_z, factor_xy = 1, xy_sp * 1.0 / z_sp
+
+        ret = []
+        for i in range(3):
+            if coord[i]<int((size[i]-1)/2):
+                ret.append((0, size[i]))
+            elif coord[i]>dim[i]-int((size[i]-1)/2):
+                ret.append((dim[i]-size[i], dim[i]))
+            else:
+                ret.append((coord[i]-int((size[i]-1)/2), coord[i]+int((size[i]-1)/2)+1))
+
+        return (ret[0], ret[1], ret[2])
+
+    def localize(self, x, y):
+        try:
+            z_sp = getattr(self.dicom_info, 'SpacingBetweenSlices', self.dicom_info.SliceThickness)
+            x_sp, y_sp = self.dicom_info.PixelSpacing
+        except:
+            z_sp=x_sp=y_sp=1
+
+        if z_sp > x_sp:
+            factor_z, factor_x = z_sp * 1.0 / x_sp, 1
+        elif x_sp > z_sp:
+            factor_z, factor_x = 1, x_sp * 1.0 / z_sp
         else:
-            factor_z = factor_xy = 1
+            factor_z = factor_x = 1
+            
+        if z_sp > y_sp:
+            factor_z, factor_y = z_sp * 1.0 / y_sp, 1
+        elif y_sp > z_sp:
+            factor_z, factor_y = 1, y_sp * 1.0 / z_sp
+        else:
+            factor_z = factor_y = 1
 
         d = self.cache[0]['data']
-        sag = np.zeros((len(self.cache), d.shape[0]), np.uint8)
-        cor = np.zeros((len(self.cache), d.shape[1]), np.uint8)
+        # sag = np.zeros((len(self.cache), d.shape[0]), np.uint8)
+        # cor = np.zeros((len(self.cache), d.shape[1]), np.uint8)
 
-        for i, imageDic in enumerate(self.cache):
-            d = np.array(imageDic['gray'])
-            sag[i, :] = d[:, i]
-            cor[i, :] = d[i, :]
+        l= len(self.cache)
+        cube_size = max(int(l/4), 128)
+        if cube_size % 2 ==0:
+            cube_size+=1
+        z_cube_size = int(round(factor_x*1.0*cube_size/factor_z))
+        if z_cube_size % 2 ==0:
+            z_cube_size+=1
 
+        sag = np.zeros((z_cube_size, cube_size), np.uint8)
+        cor = np.zeros((z_cube_size, cube_size), np.uint8)
+
+        image_ind = self.frames.get_viewport(0).image_ind
+        x_range, y_range, z_range = self.getRange((x,y,image_ind),
+                                                  (d.shape[1], d.shape[0], l),
+                                                  (cube_size, cube_size, z_cube_size))
+        i=0
+        for z_ind in range(z_range[0], z_range[1]):
+            try:
+                d = np.array(self.cache[z_ind]['gray'])
+            except:
+                continue
+            sag[i, :] = d[y_range[0]:y_range[1], x]
+            cor[i, :] = d[y, x_range[0]:x_range[1]]
+            i+=1
+
+        if i!=z_cube_size:
+            sag=np.delete(sag, np.s_[i-1:], 0)
+            cor=np.delete(cor, np.s_[i-1:], 0)
+
+        # print x_range
+        # print y_range
         vp = self.frames.get_viewport(1)
         qi = QImage(sag.data, sag.shape[1], sag.shape[0], sag.shape[1], QImage.Format_Indexed8)
-        qpx = QPixmap.fromImage(qi).scaled(sag.shape[1] * factor_xy, sag.shape[0] * factor_z)
+        qpx = QPixmap.fromImage(qi).scaled(int(round(sag.shape[1] * factor_y)),
+                                               int(round(sag.shape[0] * factor_z)))
         qpx = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         vp.setPixmap(qpx)
 
         vp = self.frames.get_viewport(2)
         qi = QImage(cor.data, cor.shape[1], cor.shape[0], cor.shape[1], QImage.Format_Indexed8)
-        qpx = QPixmap.fromImage(qi).scaled(cor.shape[1] * factor_xy, cor.shape[0] * factor_z)
+        qpx = QPixmap.fromImage(qi).scaled(int(round(cor.shape[1] * factor_x)),
+                                               int(round(cor.shape[0] * factor_z)))
         qpx = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         vp.setPixmap(qpx)
 
@@ -667,6 +735,7 @@ class MainViewer(QMainWindow):
             image_ind = vp.image_ind + 1
 
         if not 0 <= image_ind <= len(self.cache) - 1:
+            print 'No next image!'
             return
 
 
@@ -707,10 +776,9 @@ class MainViewer(QMainWindow):
     def show_image(self, index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         vp = self.frames.get_viewport(index)
-        image_ind = vp.image_ind
-        imageDic = self.cache[image_ind]
 
-        vp.setPixmap(imageDic['scaled'])
+
+        vp.setPixmap()
 
         self.show_lock.release()
 
@@ -781,21 +849,29 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
-        # self.base_dir = 'E:\Nodule Detection\case CT'
-        self.base_dir = 'C:\CT_DICOM'
+        self.base_dir = r'E:\Nodule Detection\case CT'
+        # self.base_dir = r'C:\CT_DICOM'
         # self.file_list=OrderedDict
         # self.file_list_ind=-1
         self.load_local_dir()
-        threading.Timer(1.0, lambda s: s.emit(SIGNAL('next_study')), [self]).start()
+        threading.Timer(1.0, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
-    def load_local_dir(self):
+    def load_local_dir(self, from_study_name=''):
+        found_study_name_index=0
+        i=0
         for study in os.listdir(self.base_dir):
+            if not os.path.isdir(os.path.join(self.base_dir, study)):
+                continue
+            if from_study_name==study and found_study_name_index==0:
+                found_study_name_index=i
+            i+=1
             self.study_list[study] = OrderedDict()
             for series in os.listdir(os.path.join(self.base_dir, study)):
                 self.study_list[study][series] = []
                 for images in sorted(glob.glob(os.path.join(self.base_dir, study, series, '*.dcm'))):
                     self.study_list[study][series].append(images)
         self.total_study_count = len(self.study_list)
+        self.study_index = found_study_name_index-1
 
     def load(self, jsonStr):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -877,6 +953,7 @@ class ImageViewerApp(QApplication):
             thisStudyInd = from_ind
         else:
             thisStudyInd = self.study_index + 1
+
         if not thisStudyInd < self.total_study_count:
             self.show_study_lock.release()
             # self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
@@ -940,9 +1017,11 @@ class ImageViewerApp(QApplication):
         # viewer = int(viewer)
         study = int(study)
         # w = self.viewers[viewer]
-        s = self.study_list[self.study_list.keys()[study]]
+        study_name = self.study_list.keys()[study]
+        s = self.study_list[study_name]
 
         self.viewers[0].cache = []
+        # self.viewers.
         count = 0
         for series, images in s.items():
             # self.viewers[0].cache[series] = OrderedDict()
@@ -953,8 +1032,10 @@ class ImageViewerApp(QApplication):
                 vp = self.viewers[0].frames.get_viewport(0)
                 gray = vp.apply_window(data)
                 qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8)
-                qpx = QPixmap.fromImage(qi)
-                scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                # scaled=QPixmap.fromImage(qi).scaled(
+                #     vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                # qpx = QPixmap.fromImage(qi)
+                # scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
                 # w = image_label.width()
                 # h = image_label.height()
@@ -964,21 +1045,30 @@ class ImageViewerApp(QApplication):
                 dic['data'] = data
                 dic['gray'] = gray
                 dic['qimage'] = qi
-                dic['qpixmap'] = qpx
+                # dic['qpixmap'] = qpx
                 dic['fullpath'] = image
-                dic['scaled'] = scaled
+                # dic['scaled'] = scaled
                 self.viewers[0].cache.append(dic)
 
                 if count == 0:
+                    qpx = QPixmap.fromImage(qi)
+                    scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
                     vp.setPixmap(scaled)
+                    vp.image_ind=0
                     self.viewers[0].dicom_info = dicom.read_file(image)
-                elif count > 30:
-                    break
+                    self.viewers[0].study_id = study_name
+                elif count<=20:
+                    qpx = QPixmap.fromImage(qi)
+                    scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                # elif count > 30:
+                #     break
                 count += 1
 
         # self.viewers[0].process_cache()
 
         self.study_index = study
+        self.show_study_lock.release()
 
     def load_old_hx(self, AccNo=None, win=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
