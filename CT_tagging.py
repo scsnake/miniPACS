@@ -1,30 +1,39 @@
 # -*- coding: utf-8 -*-
 
-import os, glob, sys
+import ctypes.wintypes
+import glob
+import inspect
+import json
+import logging
+import os
+import sys
 import threading
 from collections import OrderedDict
-from screeninfo import get_monitors
-from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QGraphicsScene, QLabel, QPalette, QImage
-from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
-from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
-from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL, QCoreApplication, QString
-from time import sleep, clock
-from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
-import SetWindowPos
-import json
-import logging, inspect
 from functools import partial
+from time import sleep, clock
+
 import cv2
+import dicom
 import numpy as np
-import ctypes.wintypes
+from PyQt4.QtCore import Qt, SIGNAL, QString, QPoint
+from PyQt4.QtGui import QApplication, QMainWindow, QMessageBox, QLabel, QImage
+from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont
+from PyQt4.QtGui import QWidget
+from screeninfo import get_monitors
+
+from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
 
 class ViewPort(QLabel):
-    def __init__(self, *args):
-        super(ViewPort, self).__init__(*args)
+    def __init__(self, *args, **kwargs):
+        super(ViewPort, self).__init__(*args, **kwargs)
         self.mousePressed = False
         self.mouseMoving = False
         self.zooming_mode = False
+        self.window_setting = (-600, 1500)
+        self.image_ind = -1
+        self.number = 0
+        self.parent = kwargs.get('parent', None)
 
         mag_label = QLabel(self)
         mag_label.setFixedSize(400, 400)
@@ -34,22 +43,40 @@ class ViewPort(QLabel):
         self.cal_th = None
         self.calculating = False
         self.is_sharp_image = False
-        # self.setMouseTracking(True)
+        self.setMouseTracking(True)
+        self.setStyleSheet('background-color: black;')
 
         self.connect(self, SIGNAL('set_pixmap'), self.setPixmap)
         self.connect(self, SIGNAL('set_pixmap_qimage'), self.set_pixmap_qimage)
         self.connect(self, SIGNAL('sharp_image'), self.sharp_image)
+        self.setFocus()
+
+    def apply_window(self, data):
+        wl, ww = self.window_setting
+        data[data < wl - ww] = wl - ww
+        data[data >= wl + ww] = wl + ww - 1
+        return ((data - (wl - ww)) / (2 * ww) * 256).astype(np.uint8)
+
+    def keyPressEvent(self, event):
+        k = event.key()
+        if k == Qt.Key_Down or k == Qt.Key_PageDown:
+            self.parent.emit(SIGNAL('next_image'), self.number)
+        elif k == Qt.Key_Up or k == Qt.Key_PageUp:
+            self.parent.emit(SIGNAL('prior_image'), self.number)
 
     def mousePressEvent(self, QMouseEvent):
-        if QMouseEvent.button() == Qt.LeftButton or QMouseEvent.button() == Qt.RightButton:
-            self.mousePressed = QMouseEvent.button()
-            self.mousePressedPosX = QMouseEvent.x()
-            self.mousePressedPosY = QMouseEvent.y()
-        elif QMouseEvent.button() == Qt.MiddleButton:
-            self.is_sharp_image = not self.is_sharp_image
-            self.emit(SIGNAL('sharp_image'), self.is_sharp_image)
+        self.setFocus()
+
+        if QMouseEvent.button() == Qt.LeftButton:
+            point = self.mapToGlobal(QMouseEvent.pos())
+
+            if QApplication.keyboardModifiers() == Qt.ControlModifier:
+                self.parent.emit(SIGNAL('getCoord'), point.x(), point.y(), self.number)
+            else:
+                self.parent.emit(SIGNAL('getCoord'), point.x(), point.y(), self.number, True)
 
     def mouseReleaseEvent(self, QMouseEvent):
+        return
         if QMouseEvent.button() == Qt.LeftButton or QMouseEvent.button() == Qt.RightButton:
             try:
                 self.cal_th.terminate()
@@ -62,7 +89,17 @@ class ViewPort(QLabel):
                 self.emit(SIGNAL('set_pixmap'), self.base_px)
                 self.mousePressed = False
 
-    def mouseMoveEvent(self, QMouseEvent):
+    def mouseMoveEvent(self, e):
+        if QApplication.mouseButtons() == Qt.NoButton and QApplication.keyboardModifiers() == Qt.ControlModifier:
+            l = len(self.parent.cache)
+            if l == 0:
+                return
+
+            geo = self.geometry()
+            slice_z = (e.y() - geo.y()) / (geo.height() * 1.0 / l)
+            slice_z = int(round(slice_z))
+            self.parent.emit(SIGNAL('next_image'), self.number, slice_z)
+        return
         if not self.mousePressed:
             return
 
@@ -230,58 +267,67 @@ class ProgressWin(QWidget):
     def show_self(self):
         self.show()
 
+
 class Frame():
-    def __init__(self, frame=None, ratio=None, usableHW=(0,0), show=False):
+    def __init__(self, frame=None, ratio=None, usableHW=(0, 0), show=False, mainWin=None):
         self.w, self.h = usableHW
+        self.mainWin = mainWin
 
         if ratio is not None:
             self.setRatio(ratio)
         elif frame is not None:
             self.setFrame(frame)
         else:
-            self.ratio=[]
+            self.ratio = []
 
-        self.viewports=[]
+        self.viewports = []
 
-        self.update_pos()
-
-        if show:
-            self.show()
+        self.update_pos(show=show)
 
     def setFrame(self, ratio):
-        if ratio is None
+        if ratio is None:
             return []
-        ret= []
+        ret = []
         cols = len(ratio)
-        w=1.0/cols
+        w = 1.0 / cols
         for ind, sc in enumerate(ratio):
-            x,y=ind*0.1/cols, 0
+            x, y = ind * 0.1 / cols, 0
 
             c, r = sc[0], sc[1]
-            ww, h = w/c, 1.0/r
+            ww, h = w / c, 1.0 / r
             for i in range(c):
                 for j in range(r):
-                    ret.append([x+i*ww, y+j*h, ww, h])
-        self.ratio=ret
+                    ret.append([x + i * ww, y + j * h, ww, h])
+        self.ratio = ret
 
     def setRatio(self, ratio):
-        self.ratio= ratio
+        self.ratio = ratio
 
-    def update_pos(self):
+    def update_pos(self, show=False):
         for i, ratio in enumerate(self.ratio):
             if not i < len(self.viewports):
-                vp=ViewPort()
+                vp = ViewPort(parent=self.mainWin)
+
+                vp.setStyleSheet('background-color: black;')
+                vp.setAlignment(Qt.AlignCenter)
+
                 self.viewports.append(vp)
-            self.viewports[i].setGeometry(*ratio)
-            self.viewports[i].move(ratio[0], ratio[1])
+            self.viewports[i].setGeometry(ratio[0] * 1.0 * self.w,
+                                          ratio[1] * 1.0 * self.h,
+                                          ratio[2] * 1.0 * self.w,
+                                          ratio[3] * 1.0 * self.h)
+            self.viewports[i].number = i
+
+            if show:
+                self.viewports[i].show()
+                # self.viewports[i].move(ratio[0], ratio[1])
 
     def get_viewport(self, which):
         return self.viewports[which]
 
 
-
 class MainViewer(QMainWindow):
-    def __init__(self,  app=None):
+    def __init__(self, app=None):
         super(MainViewer, self).__init__()
 
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name)
@@ -291,43 +337,33 @@ class MainViewer(QMainWindow):
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
         self.preloading_AccNo = ''
         self.app = app
+        self.cache = []
+        self.volume = []
         self.reset()
-        )
+
         self.monitors = sorted(get_monitors(), key=lambda m: m.x)
 
+        if len(self.monitors) == 1:
+            self.frames = Frame(ratio=[[0, 0, 0.5, 1.0], [0.5, 0, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
+                                usableHW=(self.monitors[0].width, self.monitors[0].height),
+                                mainWin=self, show=True)
+            self.setGeometry(self.monitors[0].x,
+                             self.monitors[0].y,
+                             self.monitors[0].width,
+                             self.monitors[0].height)
+        else:
+            self.frames = Frame(frame=[[1, 1], [1, 2]], usableHW=(self.monitors[1].width + self.monitors[2].width,
+                                                                  self.monitors[1].height),
+                                mainWin=self, show=True)
 
-        # for i, m in enumerate(sorted(get_monitors(), key=lambda m: m.x)):
-        for tmp_i in range(3):
-            if tmp_i==0:
-                mon=self.monitors[1]
-                w_w, w_h= mon.width, mon.
-            elif tmp_i==1:
-                mon=self.monitors[2]
-                w_x+=w_w
-                w_h = int(mon.height/2)
-                w_w, w_y = mon.width, mon.y
-            elif tmp_i ==2:
-                w_y+=w_h
+            self.setGeometry(self.monitors[1].x,
+                             self.monitors[1].y,
+                             self.monitors[1].width + self.monitors[2].width,
+                             self.monitors[1].height)
 
-
-            imageLabel = ViewPort(self)
-            imageLabel.setStyleSheet('background-color: black;')
-            # imageLabel.setFixedSize(m.width, m.height)
-            # imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            # imageLabel.setScaledContents(True)
-            imageLabel.setGeometry(w_x, w_y, w_w, w_h)
-            imageLabel.setAlignment(Qt.AlignCenter)
-            # imageLabel.fixedWidth = m.width
-            # imageLabel.fixedHeight = m.height
-
-            self.series_labels.append(imageLabel)
-
-        self.setGeometry(self.monitors[1].x,
-                         self.monitors[1].y,
-                         self.monitors[1].width + self.monitors[2].width,
-                         self.monitors[1].height)
-        self.hide()
-        self.setEnabled(False)
+        # self.hide()
+        # self.setEnabled(False)
+        self.setHotkey()
 
         self.connect(self, SIGNAL('load'), self.load)
         self.connect(self, SIGNAL('show'), self.show)
@@ -341,6 +377,7 @@ class MainViewer(QMainWindow):
         self.connect(self, SIGNAL('hide_count_label'), self.hide_count_label)
         self.connect(self, SIGNAL('show_count_label'), self.show_count_label)
         self.connect(self, SIGNAL('hide_old_hx'), self.hide_old_hx)
+        self.connect(self, SIGNAL('getCoord'), self.getCoord)
 
         # self._define_global_shortcuts()
 
@@ -358,6 +395,98 @@ class MainViewer(QMainWindow):
     #         image_label.z_pressed=False
 
 
+    def setHotkey(self):
+        # QShortcut(QKeySequence('Ctrl+C'), self.frames.get_viewport(0), partial(self.next_image, 0))
+        pass
+
+    def process_cache(self):
+        vp = self.frames.get_viewport(0)
+        w, h = vp.width(), vp.height()
+
+        d = self.cache[0]['data']
+        depth = len(self.cache)
+
+        volume = np.zeros((d.shape[1], d.shape[0], depth), d.dtype)
+        i = 0
+        for dataDic in self.cache:
+            volume[:, :, i] = dataDic['data']
+            scaled = dataDic['qpixmap'].scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.cache[i]['scaled'] = scaled
+            i += 1
+        self.volume = volume
+
+    def getCoord(self, mousePosX, mousePosY, index, showSagCor=False):
+        vp = self.frames.get_viewport(index)
+        image = self.cache[vp.image_ind]['data']
+        geo = vp.geometry()
+        point = vp.mapToGlobal(QPoint(geo.x(), geo.y()))
+        coord = self.mousePos2Coord((mousePosX, mousePosY),
+                                    (point.x(), point.y(), geo.width(), geo.height()),
+                                    (image.shape[1], image.shape[0]))
+        x, y = round(coord[0] * image.shape[1]), round(coord[1] * image.shape[0])
+
+        if showSagCor:
+            self.localize(x, y)
+
+    def mousePos2Coord(self, mousePos=(0, 0), viewport_dim=(0, 0, 0, 0), image_dim=(0, 0)):
+        x, y, w, h = viewport_dim
+        im_w, im_h = image_dim
+        mx, my = mousePos
+        if im_w * 1.0 / im_h > w * 1.0 / h:
+            if not x <= mx <= x + w - 1:
+                return None
+            i_w = w
+            i_h = i_w * 1.0 / im_w * im_h
+
+            if not y + (h - i_h) * 1.0 / 2 <= my <= y + (h + i_h) * 1.0 / 2:
+                return None
+
+            coord0 = (mx - x) * 1.0 / w
+            coord1 = (my - (y + (h - i_h) * 1.0 / 2)) / i_h
+        else:
+            if not y <= my <= y + h - 1:
+                return None
+            i_h = h
+            i_w = i_h * 1.0 / im_h * im_w
+
+            if not (x + (w - i_w) * 1.0 / 2) <= mx <= x(w + i_w) * 1.0 / 2:
+                return None
+
+            coord1 = (my - y) * 1.0 / h
+            coord0 = (mx - (x + (w - i_w) * 1.0 / 2)) / i_w
+
+        return (coord0, coord1)
+
+    def localize(self, x, y):
+        z_sp, xy_sp = self.dicom_info.SpacingBetweenSlices, self.dicom_info.PixelSpacing[0]
+
+        if z_sp > xy_sp:
+            factor_z, factor_xy = z_sp * 1.0 / xy_sp, 1
+        elif xy_sp > z_sp:
+            factor_z, factor_xy = 1, xy_sp * 1.0 / z_sp
+        else:
+            factor_z = factor_xy = 1
+
+        d = self.cache[0]['data']
+        sag = np.zeros((len(self.cache), d.shape[0]), np.uint8)
+        cor = np.zeros((len(self.cache), d.shape[1]), np.uint8)
+
+        for i, imageDic in enumerate(self.cache):
+            d = np.array(imageDic['gray'])
+            sag[i, :] = d[:, i]
+            cor[i, :] = d[i, :]
+
+        vp = self.frames.get_viewport(1)
+        qi = QImage(sag.data, sag.shape[1], sag.shape[0], sag.shape[1], QImage.Format_Indexed8)
+        qpx = QPixmap.fromImage(qi).scaled(sag.shape[1] * factor_xy, sag.shape[0] * factor_z)
+        qpx = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        vp.setPixmap(qpx)
+
+        vp = self.frames.get_viewport(2)
+        qi = QImage(cor.data, cor.shape[1], cor.shape[0], cor.shape[1], QImage.Format_Indexed8)
+        qpx = QPixmap.fromImage(qi).scaled(cor.shape[1] * factor_xy, cor.shape[0] * factor_z)
+        qpx = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        vp.setPixmap(qpx)
 
     def show_enable(self):
         self.setEnabled(True)
@@ -420,13 +549,14 @@ class MainViewer(QMainWindow):
         self.folder = ''
         self.expected_image_count = []
         self.total_image_count = 0
+        self.image_ind = 0
         self.loaded_image = OrderedDict()
         self.ind = OrderedDict()
         self.AccNo = ''
         self.ChartNo = ''
         self.timers = []
         self.preprocessed = []
-        self.frames= [[0,0,0.5,1], [0.5,0,0.5,0.5], [0.5,0.5,0.5,0.5]]
+        self.frames = [[0, 0, 0.5, 1], [0.5, 0, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]]
 
     def load(self, study):
 
@@ -527,36 +657,38 @@ class MainViewer(QMainWindow):
         else:
             self.emit(SIGNAL('prior_image'), '', index)
 
-    def next_image(self, AccNo='', index=0):
+    def next_image(self, index=0, from_ind=None):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        self.show_lock.acquire()
-        AccNo, index = self.whichLabel(AccNo, index)
-        expected_image_count = self.expected_image_count[index][AccNo]
-        ind = self.ind[AccNo]
 
-        if ind == '':
-            ind = 0
+        vp = self.frames.get_viewport(index)
+        if from_ind is not None:
+            image_ind = int(from_ind)
         else:
-            ind = (ind + 1) % expected_image_count
-        self.ind[AccNo] = ind
+            image_ind = vp.image_ind + 1
+
+        if not 0 <= image_ind <= len(self.cache) - 1:
+            return
+
+
+        self.show_lock.acquire()
+        vp.image_ind = image_ind
 
         # self.show_image(ind, AccNo=AccNo)
-        self.emit(SIGNAL('show_image'), ind, AccNo)
+        self.emit(SIGNAL('show_image'), index)
         # self.after(1000, self.next_image)
 
-    def prior_image(self, AccNo='', index=0):
+    def prior_image(self, index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        self.show_lock.acquire()
-        AccNo, index = self.whichLabel(AccNo, index)
-        expected_image_count = self.expected_image_count[index][AccNo]
-        ind = self.ind[AccNo]
+        vp = self.frames.get_viewport(index)
+        if vp.image_ind == 0:
+            return
 
-        if ind == '':
-            ind = expected_image_count - 1
-        else:
-            ind = (ind + expected_image_count - 1) % expected_image_count
-        self.ind[AccNo] = ind
-        self.show_image(ind, AccNo=AccNo)
+        self.show_lock.acquire()
+        vp.image_ind -= 1
+
+        # self.show_image(ind, AccNo=AccNo)
+        self.emit(SIGNAL('show_image'), index)
+        # self.after(1000, self.next_image)
 
     def show_curtain(self, index=0, curtain_label=None):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -572,66 +704,17 @@ class MainViewer(QMainWindow):
     def show_count_label(self, index):
         self.series_labels[index].count_label.show()
 
-    def show_image(self, image_ind, AccNo='', index=0):
+    def show_image(self, index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        AccNo, index = self.whichLabel(AccNo, index)
+        vp = self.frames.get_viewport(index)
+        image_ind = vp.image_ind
+        imageDic = self.cache[image_ind]
 
-        image_label = self.series_labels[index]
-        image_label.count_label.setText('%d / %d' % (image_ind + 1,
-                                                     self.expected_image_count[index][AccNo]))
-        try:
-            image_label.count_label.hide_label_th.cancel()
-            image_label.count_label.hide_label_th.terminate()
-        except:
-            pass
-        finally:
-            th = threading.Timer(1, lambda i: self.emit(SIGNAL('hide_count_label'), i), [index])
-            th.start()
-            image_label.count_label.hide_label_th = th
+        vp.setPixmap(imageDic['scaled'])
 
-        try:
-            image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
-        except:
-            image_label.clear()
-            # self.show_curtain(index=index)
-            print('Image %d not found!' % image_ind)
-            threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
-            return
-
-        try:
-            if image_path in self.loaded_image[AccNo]:
-                image = self.loaded_image[AccNo][image_path]
-            else:
-                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-                # self.load_single_image(Acc, image_path, image)
-        except:
-            image_label.clear()
-            # self.show_curtain(index=index)
-            print('Image %d not loaded!' % image_ind)
-            threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
-            return
-
-        self.series_labels[index].curtain_label.hide()
-        self.series_labels[index].count_label.show()
-        self.info_label.show()
-
-        # TODO: keep preprocessed data according to image_ind, not image_label
-        px = QPixmap.fromImage(
-            QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
-        w = image_label.width()
-        h = image_label.height()
-        scaled = px.scaled(w, h, Qt.KeepAspectRatio)
-        image_label.emit(SIGNAL('set_pixmap'), scaled)
-        # image_label.setPixmap(scaled)
-        image_label.setEnabled(True)
-        image_label.show()
-        # image_label.activateWindow()
-
-        threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
-        # self.setWindowTitle(image_path)
         self.show_lock.release()
-        image_label.curtain_label.hide()
-        Send_WM_COPYDATA(self.app.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), self.app.dwData)
+
+        # Send_WM_COPYDATA(self.app.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), self.app.dwData)
 
     def preprocessing(self, image_label, image, scaled):
         # cl=clock()
@@ -650,16 +733,16 @@ class MainViewer(QMainWindow):
 class ImageViewerApp(QApplication):
     dwData = 17
 
-    def __init__(self, list, folderPath, totalViewer=4):
+    def __init__(self, list):
         super(ImageViewerApp, self).__init__(list)
         self.screen_count = QDesktopWidget().screenCount()
         self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
-        self.folder_path = folderPath
+        # self.folder_path = folderPath
         self.viewers = []
         self.viewer_index = -1
         self.study_index = -1
-        self.total_viewer_count = totalViewer
-        self.study_list = {}
+        self.total_viewer_count = 1
+        self.study_list = OrderedDict()
         self.preload_threads = []
         # self.study_list_lock = threading.Lock()
         self.show_study_lock = threading.Lock()
@@ -671,23 +754,26 @@ class ImageViewerApp(QApplication):
         self.fast_mode = False
         self.total_study_count = 0
         self.x = self.y = self.h = 0
+        self.cache = {}
 
-        if self.total_viewer_count > 2:
-            self.preload_count = self.total_viewer_count - 2
-        elif self.total_viewer_count > 1:
-            self.preload_count = 1
-        else:
-            self.preload_count = 0
+        # if self.total_viewer_count > 2:
+        #     self.preload_count = self.total_viewer_count - 2
+        # elif self.total_viewer_count > 1:
+        #     self.preload_count = 1
+        # else:
+        #     self.preload_count = 0
+        #
+        # for _ in range(totalViewer):
+        #     self.viewers.append(MainViewer(app=self))
 
-        for _ in range(totalViewer):
-            self.viewers.append(MainViewer(app=self))
+        self.viewers.append(MainViewer(app=self))
+        self.viewers[0].show()
+        # self.progressWin = ProgressWin(app=self)
 
-        self.progressWin = ProgressWin(app=self)
-
-        oldHxLabel = QLabel()
-        oldHxLabel.setGeometry(0, 0, 0, 0)
-        oldHxLabel.hide()
-        self.oldHx_label = oldHxLabel
+        # oldHxLabel = QLabel()
+        # oldHxLabel.setGeometry(0, 0, 0, 0)
+        # oldHxLabel.hide()
+        # self.oldHx_label = oldHxLabel
 
         self.connect(self, SIGNAL('show_study'), self.show_study)
         self.connect(self, SIGNAL('next_study'), self.next_study)
@@ -695,15 +781,21 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
-        self.base_dir = 'E:\Nodule Detection\case CT'
+        # self.base_dir = 'E:\Nodule Detection\case CT'
+        self.base_dir = 'C:\CT_DICOM'
+        # self.file_list=OrderedDict
+        # self.file_list_ind=-1
         self.load_local_dir()
-        # self.next_study()
+        threading.Timer(1.0, lambda s: s.emit(SIGNAL('next_study')), [self]).start()
 
     def load_local_dir(self):
         for study in os.listdir(self.base_dir):
+            self.study_list[study] = OrderedDict()
             for series in os.listdir(os.path.join(self.base_dir, study)):
+                self.study_list[study][series] = []
                 for images in sorted(glob.glob(os.path.join(self.base_dir, study, series, '*.dcm'))):
-                    print images
+                    self.study_list[study][series].append(images)
+        self.total_study_count = len(self.study_list)
 
     def load(self, jsonStr):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -787,30 +879,30 @@ class ImageViewerApp(QApplication):
             thisStudyInd = self.study_index + 1
         if not thisStudyInd < self.total_study_count:
             self.show_study_lock.release()
-            self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
+            # self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
             self.emit(SIGNAL('show_dialog'))
             return
-        if not thisStudyInd in self.study_list:
-            threading.Timer(0.5, self.next_study, [from_ind]).start()
-            self.show_study_lock.release()
-            return
+        # if not thisStudyInd in self.study_list:
+        #     threading.Timer(0.5, self.next_study, [from_ind]).start()
+        #     self.show_study_lock.release()
+        #     return
 
-        thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
+        # thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
 
-        self.show_study(viewer=thisViewerInd, study=thisStudyInd, from_next=True)
+        self.show_study(study=thisStudyInd, from_next=True)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
-
-        try:
-            map(lambda t: t.cancel(), self.preload_threads)
-            map(lambda t: t.terminate(), self.preload_threads)
-        except:
-            pass
-        finally:
-            self.preload_threads = []
-            for i in range(self.preload_count):
-                th = threading.Timer(i + 1, partial(self.preload, i + 1))
-                th.start()
-                self.preload_threads.append(th)
+        #
+        # try:
+        #     map(lambda t: t.cancel(), self.preload_threads)
+        #     map(lambda t: t.terminate(), self.preload_threads)
+        # except:
+        #     pass
+        # finally:
+        #     self.preload_threads = []
+        #     for i in range(self.preload_count):
+        #         th = threading.Timer(i + 1, partial(self.preload, i + 1))
+        #         th.start()
+        #         self.preload_threads.append(th)
 
     def prior_study(self):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -837,58 +929,56 @@ class ImageViewerApp(QApplication):
         if msg.exec_() == QMessageBox.Ok:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
 
-    def show_study(self, viewer, study, from_next=''):
+    def read_dicom(self, path):
+        f = dicom.read_file(path)
+
+        s, i = f.RescaleSlope, f.RescaleIntercept
+        return np.array(f.pixel_array) * s + i
+
+    def show_study(self, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        viewer = int(viewer)
+        # viewer = int(viewer)
         study = int(study)
-        w = self.viewers[viewer]
-        s = self.study_list[study]
-        AccNo = s['AccNo']
-        c = self.viewers[self.viewer_index]
+        # w = self.viewers[viewer]
+        s = self.study_list[self.study_list.keys()[study]]
 
-        if w.AccNo != AccNo and w.preloading_AccNo != AccNo:
-            # self.load_thread_lock.acquire()
-            logging.info('load now')
-            # w.load(**s)
-            w.preloading_AccNo = AccNo
-            w.emit(SIGNAL('load'), s)
-            # SetWindowPos.insertAfter(w.winId(), c.winId())
-            # self.load_thread_lock.release()
+        self.viewers[0].cache = []
+        count = 0
+        for series, images in s.items():
+            # self.viewers[0].cache[series] = OrderedDict()
+            for image in images:
+                filename = os.path.basename(image)
+                # self.viewers[0].cache[series][filename] = OrderedDict()
+                data = self.read_dicom(image)
+                vp = self.viewers[0].frames.get_viewport(0)
+                gray = vp.apply_window(data)
+                qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8)
+                qpx = QPixmap.fromImage(qi)
+                scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
-        w.emit(SIGNAL('hide_old_hx'))
-        w.emit(SIGNAL('show_enable'))
-        # w.setEnabled(True)
-        # w.setWindowFlags(Qt.Widget | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowStaysOnTopHint)
-        # w.show()
-        # w.activateWindow()
+                # w = image_label.width()
+                # h = image_label.height()
+                # scaled = px.scaled(w, h, Qt.KeepAspectRatio)
+                #
+                dic = {}
+                dic['data'] = data
+                dic['gray'] = gray
+                dic['qimage'] = qi
+                dic['qpixmap'] = qpx
+                dic['fullpath'] = image
+                dic['scaled'] = scaled
+                self.viewers[0].cache.append(dic)
 
-        c.emit(SIGNAL('hide_disable'))
-        # c.hide()
-        # c.setEnabled(False)
+                if count == 0:
+                    vp.setPixmap(scaled)
+                    self.viewers[0].dicom_info = dicom.read_file(image)
+                elif count > 30:
+                    break
+                count += 1
 
-        w.emit(SIGNAL('show_count_label'), 0)
-        th = threading.Timer(1, lambda i: w.emit(SIGNAL('hide_count_label'), i), [0])
-        th.start()
-        w.image_labels[0].count_label.hide_label_th = th
+        # self.viewers[0].process_cache()
 
-        self.viewer_index = viewer
         self.study_index = study
-        # print str(viewer) +','+str(study)
-        if from_next:
-            self.progressWin.pTick = clock()
-            self.progressWin.emit(SIGNAL('show'))
-        self.show_study_lock.release()
-        self.AccNo = AccNo
-
-        if not self.fast_mode:
-            try:
-                map(lambda t: t.terminate(), self.old_hx_threads)
-            except:
-                pass
-            finally:
-                th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
-                th.start()
-                self.old_hx_threads.append(th)
 
     def load_old_hx(self, AccNo=None, win=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -986,7 +1076,7 @@ def getMyDocPath():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    app = ImageViewerApp(sys.argv, os.path.join(getMyDocPath(), 'feedRIS'))
+    app = ImageViewerApp(sys.argv)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
