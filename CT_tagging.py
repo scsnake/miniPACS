@@ -402,7 +402,7 @@ class MainViewer(QMainWindow):
         self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10)
         self.preload_queue = SetQueue()
         threading.Thread(target=self.preload_th).start()
-        threading.Thread(target=self.preload_image_clean).start()
+        # threading.Thread(target=self.preload_image_clean).start()
         # self._define_global_shortcuts()
 
         # def keyPressEvent(self, QKeyEvent):
@@ -833,7 +833,7 @@ class MainViewer(QMainWindow):
         vp.setPixmap(qpx)
 
         self.show_lock.release()
-        threading.Thread(target=self.preload_image()).start()
+        threading.Thread(target=self.preload_image).start()
 
         # Send_WM_COPYDATA(self.app.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), self.app.dwData)
 
@@ -1020,8 +1020,8 @@ class ImageViewerApp(QApplication):
 
         # thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
 
-        self.show_study(study=thisStudyInd, from_next=True)
-        # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
+        # self.show_study(study=thisStudyInd, from_next=True)
+        self.emit(SIGNAL('show_study'), thisStudyInd, True)
         #
         # try:
         #     map(lambda t: t.cancel(), self.preload_threads)
@@ -1105,23 +1105,28 @@ class ImageViewerApp(QApplication):
                 # dic['scaled'] = scaled
                 self.viewers[0].cache.append(dic)
 
-                if count == 0:
-                    qpx = QPixmap.fromImage(qi)
-                    scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                # if count == 0:
 
-                    vp.setPixmap(scaled)
-                    # print clock()-cl
-                    self.viewers[0].px_cache[count] = scaled
-                    vp.image_ind = 0
-                    self.viewers[0].dicom_info = dicom.read_file(image)
-                    self.viewers[0].study_id = study_name
-                elif count <= 10:
-                    qpx = QPixmap.fromImage(qi)
-                    scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    self.viewers[0].px_cache[count] = scaled
+                # break
+                # elif count <= 10:
+                #     qpx = QPixmap.fromImage(qi)
+                #     scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                #     self.viewers[0].px_cache[count] = scaled
+                # else:
+                #     break
                 # elif count > 30:
                 #     break
                 count += 1
+        qpx = QPixmap.fromImage(self.viewers[0].cache[0]['qimage'])
+        scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        vp.setPixmap(scaled)
+        # vp.emit(SIGNAL('setPixmap'), scaled)
+        # print clock()-cl
+        self.viewers[0].px_cache[count] = scaled
+        vp.image_ind = 0
+        self.viewers[0].dicom_info = dicom.read_file(image)
+        self.viewers[0].study_id = study_name
 
         # self.viewers[0].process_cache()
         self.viewers[0].preload_image()
