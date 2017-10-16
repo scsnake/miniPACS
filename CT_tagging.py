@@ -45,7 +45,8 @@ class ViewPort(QLabel):
         self.cal_th = None
         self.calculating = False
         self.is_sharp_image = False
-        self.setMouseTracking(True)
+        self.setMouseTracking(False)
+        self.mouse_move_surf = False
         self.setStyleSheet('background-color: black;')
 
         self.connect(self, SIGNAL('set_pixmap'), self.setPixmap)
@@ -61,8 +62,14 @@ class ViewPort(QLabel):
 
     def keyPressEvent(self, event):
         k = event.key()
+        # if k==Qt.Key_Z:
         if k==Qt.Key_Control:
-            self.mouse_move_first()
+            self.mouse_move_surf = ~ self.mouse_move_surf
+            if self.mouse_move_surf:
+                self.mouse_move_first()
+                self.setMouseTracking(True)
+            else:
+                self.setMouseTracking(False)
         elif k == Qt.Key_Down:
             self.parent.emit(SIGNAL('next_image'), self.number)
         elif k == Qt.Key_Up:
@@ -106,8 +113,8 @@ class ViewPort(QLabel):
                 self.mousePressed = False
 
     def mouseMoveEvent(self, e):
-        # if QApplication.mouseButtons() == Qt.NoButton:
-        if QApplication.mouseButtons() == Qt.NoButton and QApplication.keyboardModifiers() == Qt.ControlModifier:
+        if QApplication.mouseButtons() == Qt.NoButton and self.mouse_move_surf:
+            # if QApplication.mouseButtons() == Qt.NoButton and QApplication.keyboardModifiers() == Qt.ControlModifier:
             l = len(self.parent.cache)
             if l == 0:
                 return
@@ -409,7 +416,8 @@ class MainViewer(QMainWindow):
         self.connect(self, SIGNAL('hide_old_hx'), self.hide_old_hx)
         self.connect(self, SIGNAL('getCoord'), self.getCoord)
         self.connect(self, SIGNAL('preloading'), self.preloading)
-        self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10)
+        self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10,
+                            11, -11, 12, -12, 13, -13, 14, -14, 15, -15, 16, -16, 17, -17, 18, -18, 19, -19, 20, -20)
         self.preload_queue = SetQueue()
         threading.Thread(target=self.preload_th).start()
         threading.Thread(target=self.preload_image_clean).start()
@@ -434,7 +442,7 @@ class MainViewer(QMainWindow):
     #         image_label.z_pressed=False
     def preload_image(self):
         vp = self.frames.get_viewport(0)
-        image_ind = int(vp.image_ind*1.0/5)
+        image_ind = int(vp.image_ind * 1.0 / 10)
         l = len(self.cache)
         for i in self.preload_seq:
             ind = image_ind + i
@@ -903,7 +911,7 @@ class MainViewer(QMainWindow):
 
         self.show_lock.release()
 
-        self.this_image_interval = int(image_ind*1.0/5)
+        self.this_image_interval = int(image_ind * 1.0 / 10)
         if self.prior_image_interval != self.this_image_interval:
             threading.Thread(target=self.preload_image).start()
         self.prior_image_interval = self.this_image_interval
@@ -975,12 +983,12 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
-        self.base_dir = r'E:\Nodule Detection\case CT'
-        # self.base_dir = r'C:\CT_DICOM'
+        # self.base_dir = r'E:\Nodule Detection\case CT'
+        self.base_dir = r'C:\CT_DICOM'
         # self.file_list=OrderedDict
         # self.file_list_ind=-1
 
-        self.load_local_dir(r'1734747')
+        self.load_local_dir()
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
@@ -1214,9 +1222,11 @@ class ImageViewerApp(QApplication):
         self.load_study_saved_nodule(study)
         w, h =vp.width(), vp.height()
     def load_study_saved_nodule(self, study):
-
-        with open(os.path.join(self.base_dir, 'output.txt'), 'r') as f:
-            content = f.readlines()
+        try:
+            with open(os.path.join(self.base_dir, 'output.txt'), 'r') as f:
+                content = f.readlines()
+        except:
+            return {}
         content = [x.strip().split(',') for x in content]
         ret={}
         for line in content:
