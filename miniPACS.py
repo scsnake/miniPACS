@@ -86,8 +86,8 @@ class ImageLabel(QLabel):
         # cl = clock()
         self.base_px = QPixmap.fromImage(
             QImage(self.base_image.data, self.base_image.shape[1], self.base_image.shape[0],
-                   self.base_image.shape[1], QImage.Format_Indexed8)) \
-            .scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio)
+                   self.base_image.shape[1], QImage.Format_Indexed8) \
+            .scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         # print clock() - cl
         self.setPixmap(self.base_px)
 
@@ -157,7 +157,7 @@ class ImageLabel(QLabel):
 
     def set_pixmap_qimage(self, im):
         # self.setPixmap(QPixmap.fromImage(im))
-        self.setPixmap(QPixmap.fromImage(im).scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio))
+        self.setPixmap(QPixmap.fromImage(im.scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
 
     def sigmoid(self, x):
         return 1 + x / (1 + abs(x))
@@ -605,11 +605,13 @@ class ImageViewer(QMainWindow):
         self.info_label.show()
 
         # TODO: keep preprocessed data according to image_ind, not image_label
-        px = QPixmap.fromImage(
-            QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8))
         w = image_label.width()
         h = image_label.height()
-        scaled = px.scaled(w, h, Qt.KeepAspectRatio)
+        px = QPixmap.fromImage(
+            QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8)
+                .scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+        scaled = px
         image_label.emit(SIGNAL('set_pixmap'), scaled)
         # image_label.setPixmap(scaled)
         image_label.setEnabled(True)
