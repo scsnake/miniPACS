@@ -19,9 +19,10 @@ import dicom
 import numpy as np
 from PyQt4.QtCore import Qt, SIGNAL, QString, QPoint
 from PyQt4.QtGui import QApplication, QMainWindow, QMessageBox, QLabel, QImage, QPainter, QPen, QBrush
-from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont
+from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont, QToolTip
 from PyQt4.QtGui import QWidget, QCursor
 from screeninfo import get_monitors
+from scipy.ndimage import zoom
 
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
@@ -58,7 +59,7 @@ class ViewPort(QLabel):
         wl, ww = self.window_setting
         data[data < wl - ww] = wl - ww
         data[data >= wl + ww] = wl + ww - 1
-        return ((data - (wl - ww)) / (2 * ww) * 256).astype(np.uint8)
+        return ((data - (wl - ww)) * 256.0 / (2 * ww)).astype(np.uint8)
 
     def keyPressEvent(self, event):
         k = event.key()
@@ -87,6 +88,13 @@ class ViewPort(QLabel):
         new_y = int(round(interval * self.image_ind + interval * 0.5))
         QCursor.setPos(self.mapToGlobal(QPoint(point.x(), new_y)))
 
+    def wheelEvent(self, e):
+        if e.delta() < 0:
+            self.parent.emit(SIGNAL('next_image'), self.number)
+        elif e.delta() > 0:
+
+            self.parent.emit(SIGNAL('prior_image'), self.number)
+
     def mousePressEvent(self, QMouseEvent):
         self.setFocus()
 
@@ -100,17 +108,6 @@ class ViewPort(QLabel):
 
     def mouseReleaseEvent(self, QMouseEvent):
         return
-        if QMouseEvent.button() == Qt.LeftButton or QMouseEvent.button() == Qt.RightButton:
-            try:
-                self.cal_th.terminate()
-                self.original_image_processing_th.cancel()
-                self.original_image_processing_th.terminate()
-            except:
-                pass
-            finally:
-                # self.setPixmap(self.original_px)
-                self.emit(SIGNAL('set_pixmap'), self.base_px)
-                self.mousePressed = False
 
     def mouseMoveEvent(self, e):
         if QApplication.mouseButtons() == Qt.NoButton and self.mouse_move_surf:
@@ -417,11 +414,12 @@ class MainViewer(QMainWindow):
         self.connect(self, SIGNAL('hide_old_hx'), self.hide_old_hx)
         self.connect(self, SIGNAL('getCoord'), self.getCoord)
         self.connect(self, SIGNAL('preloading'), self.preloading)
+        self.connect(self, SIGNAL('tooltip_hideText'), self.tooltip_hideText)
         self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10,
                             11, -11, 12, -12, 13, -13, 14, -14, 15, -15, 16, -16, 17, -17, 18, -18, 19, -19, 20, -20)
         self.preload_queue = SetQueue()
-        # threading.Thread(target=self.preload_th).start()
-        # threading.Thread(target=self.preload_image_clean).start()
+        threading.Thread(target=self.preload_th).start()
+        threading.Thread(target=self.preload_image_clean).start()
         self.prior_image_interval = -1
         self.saved_nodules = {}
         self.study_id = ''
@@ -442,9 +440,12 @@ class MainViewer(QMainWindow):
     #         image_label=self.image_labels[0]
     #         image_label.emit(SIGNAL('set_pixmap'), image_label.original_px)
     #         image_label.z_pressed=False
+    def tooltip_hideText(self):
+        QToolTip.hideText()
+
     def preload_image(self):
         vp = self.frames.get_viewport(0)
-        image_ind = int(vp.image_ind * 1.0 / 10)
+        image_ind = int(vp.image_ind * 1.0 / 10)*10
         l = len(self.cache)
         for i in self.preload_seq:
             ind = image_ind + i
@@ -454,6 +455,7 @@ class MainViewer(QMainWindow):
                 # threading.Thread(target=self.preloading, args=(ind,)).start()
                 # threading.Thread(target=lambda:self.emit(SIGNAL('preloading'), ind)).start()
                 self.preload_queue.put(ind)
+                # print 'preload_queue_put: %d' % (ind, )
 
                 # threading.Thread(target=self.preload_image_clean).start()
 
@@ -462,21 +464,29 @@ class MainViewer(QMainWindow):
             ind = self.preload_queue.get(True)
             self.emit(SIGNAL('preloading'), ind)
             # self.preloading(ind)
-            self.preload_image_clean()
+            # self.preload_image_clean()
 
     def preload_image_clean(self):
         while (True):
             image_ind = self.frames.get_viewport(0).image_ind
             for k, v in self.px_cache.items():
-                if abs(k - image_ind) > 20:
+                if abs(k - image_ind) > 40:
                     self.px_cache.pop(k, None)
             sleep(0.5)
 
     def preloading(self, image_ind):
+        loading_status = self.px_cache.get(image_ind, None)
+        if loading_status is not None:
+            return
+
+        self.px_cache[image_ind] = True
         vp = self.frames.get_viewport(0)
-        qi = self.cache[image_ind]['qimage']
-        scaled = QPixmap.fromImage(qi).scaled(
-            vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        w, h = vp.width(), vp.height()
+        gray = self.cache[image_ind]['gray']
+        qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
+            w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        scaled = QPixmap.fromImage(qi)
 
         if image_ind in self.saved_nodules:
             geo = vp.geometry()
@@ -499,6 +509,7 @@ class MainViewer(QMainWindow):
             painter.end()
 
         self.px_cache[image_ind] = scaled
+        # print 'preloading: %d' % (image_ind, )
         return scaled
 
     def setHotkey(self):
@@ -529,7 +540,7 @@ class MainViewer(QMainWindow):
         coord = self.mousePos2Coord((mousePosX, mousePosY),
                                     (point.x(), point.y(), geo.width(), geo.height()),
                                     (image.shape[1], image.shape[0]))
-        x, y = int(round(coord[0] * image.shape[1])), int(round(coord[1] * image.shape[0]))
+        x, y = coord
 
         if showSagCor:
             self.localize(x, y)
@@ -539,13 +550,21 @@ class MainViewer(QMainWindow):
 
     def save_nodule(self, x, y, z):
         with codecs.open(os.path.join(self.app.base_dir, 'output.txt'), 'a', 'utf-8') as text_file:
-            text_file.write('%s,%d,%d,%d\n' % (self.study_id, x, y, z))
-
+            text_file.write('%s,%d,%d,%d\n' % (self.study_id, x + 1, y + 1, z + 1))
+        s = 'Nodule saved: %d, %d, %d' % (x + 1, y + 1, z + 1)
+        QToolTip.showText(QCursor.pos(), s)
+        print s
         if z not in self.saved_nodules:
             self.saved_nodules[z] = []
         self.saved_nodules[z].append([x, y])
 
-    def mousePos2Coord(self, mousePos=(0, 0), viewport_dim=(0, 0, 0, 0), image_dim=(0, 0)):
+    def mousePos2Coord(self, mousePos=(0, 0), viewport_dim=(0, 0, 2048, 2560), image_dim=(512, 512)):
+        '''
+        :param mousePos: mouse pos x, y (global)
+        :param viewport_dim: viewport x, y, w, h (global)
+        :param image_dim: original dimension (512, 512)
+        :return: coord of image pixel in original dimension (zero-based)
+        '''
         x, y, w, h = viewport_dim
         im_w, im_h = image_dim
         mx, my = mousePos
@@ -559,7 +578,7 @@ class MainViewer(QMainWindow):
                 return None
 
             coord0 = (mx - x) * 1.0 / w
-            coord1 = (my - (y + (h - i_h) * 1.0 / 2)) / i_h
+            coord1 = (my - (y + (h - i_h) / 2)) / i_h
         else:
             if not y <= my <= y + h - 1:
                 return None
@@ -570,11 +589,18 @@ class MainViewer(QMainWindow):
                 return None
 
             coord1 = (my - y) * 1.0 / h
-            coord0 = (mx - (x + (w - i_w) * 1.0 / 2)) / i_w
+            coord0 = (mx - (x + (w - i_w) / 2)) / i_w
 
-        return (coord0, coord1)
+        return (min(int(coord0 * im_w), im_w - 1), min(int(coord1 * im_h), im_h - 1))
 
-    def coord2mousePos(self, coord=(0, 0), viewport_dim=(0, 0, 0, 0), image_dim=(0, 0)):
+    def coord2mousePos(self, coord=(0, 0), viewport_dim=(0, 0, 2048, 2560), image_dim=(512, 512),
+                       relative_to_pixmap=True):
+        '''
+        :param coord: coord of image pixel in original dimension (zero-based)
+        :param viewport_dim: viewport x, y, w, h (global)
+        :param image_dim: original dimension (512, 512)
+        :return: mouse pos x, y
+        '''
         x, y, w, h = viewport_dim
         im_w, im_h = image_dim
         cx, cy = coord
@@ -586,14 +612,20 @@ class MainViewer(QMainWindow):
 
             i_w = w
             i_h = i_w * 1.0 / im_w * im_h
-            mx = (i_w * 1.0 / im_w) * (cx - 0.5) + x
-            my = (i_h * 1.0 / im_h) * (cy - 0.5) + y
+            mx = (i_w * 1.0 / im_w) * (cx + 0.5)
+            my = (i_h * 1.0 / im_h) * (cy + 0.5)
+            if not relative_to_pixmap:
+                mx += x
+                my += y + (h - i_h) / 2
 
         else:
             i_h = h
             i_w = i_h * 1.0 / im_h * im_w
-            mx = (i_w * 1.0 / im_w) * (cx - 0.5) + x
-            my = (i_h * 1.0 / im_h) * (cy - 0.5) + y
+            mx = (i_w * 1.0 / im_w) * (cx + 0.5)
+            my = (i_h * 1.0 / im_h) * (cy + 0.5)
+            if not relative_to_pixmap:
+                my += y
+                mx += x + (w - i_w) / 2
 
         return (int(mx), int(my))
 
@@ -631,7 +663,7 @@ class MainViewer(QMainWindow):
         else:
             factor_z = factor_y = 1
 
-        d = self.cache[0]['data']
+        d = self.cache[0]['gray']
         # sag = np.zeros((len(self.cache), d.shape[0]), np.uint8)
         # cor = np.zeros((len(self.cache), d.shape[1]), np.uint8)
 
@@ -645,6 +677,7 @@ class MainViewer(QMainWindow):
 
         sag = np.zeros((z_cube_size, cube_size), np.uint8)
         cor = np.zeros((z_cube_size, cube_size), np.uint8)
+        im_w, im_h = cube_size, z_cube_size
 
         image_ind = self.frames.get_viewport(0).image_ind
         x_range, y_range, z_range = self.getRange((x, y, image_ind),
@@ -659,6 +692,11 @@ class MainViewer(QMainWindow):
             sag[i, :] = d[y_range[0]:y_range[1], x]
             cor[i, :] = d[y, x_range[0]:x_range[1]]
             i += 1
+        QToolTip.showText(QCursor.pos(), 'Coordinate: %d, %d' % (x + 1, y + 1))
+        threading.Timer(2, lambda: self.emit(SIGNAL('tooltip_hideText')))
+        new_x = x - x_range[0]
+        new_y = y - y_range[0]
+        new_z = image_ind - z_range[0]
 
         if i != z_cube_size:
             sag = np.delete(sag, np.s_[i - 1:], 0)
@@ -666,19 +704,42 @@ class MainViewer(QMainWindow):
 
         # print x_range
         # print y_range
+        new_imw, new_imh = int(round(sag.shape[1] * factor_y)), int(round(sag.shape[0] * factor_z))
         vp = self.frames.get_viewport(1)
         qi = QImage(sag.data, sag.shape[1], sag.shape[0], sag.shape[1], QImage.Format_Indexed8)
-        qpx = QPixmap.fromImage(qi).scaled(int(round(sag.shape[1] * factor_y)),
-                                           int(round(sag.shape[0] * factor_z)))
-        qpx = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        qpx = QPixmap.fromImage(qi) \
+            .scaled(new_imw, new_imh) \
+            .scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        geo = vp.geometry()
+        mx, my = self.coord2mousePos((new_y * factor_y, new_z * factor_z),
+                                     (geo.x(), geo.y(), geo.width(), geo.height()), (new_imw, new_imh))
+        qpx = self.draw_cross(qpx, (mx, my))
         vp.setPixmap(qpx)
 
+        new_imw, new_imh = int(round(cor.shape[1] * factor_x)), int(round(cor.shape[0] * factor_z))
         vp = self.frames.get_viewport(2)
         qi = QImage(cor.data, cor.shape[1], cor.shape[0], cor.shape[1], QImage.Format_Indexed8)
-        qpx = QPixmap.fromImage(qi).scaled(int(round(cor.shape[1] * factor_x)),
-                                           int(round(cor.shape[0] * factor_z)))
-        qpx = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        qpx = QPixmap.fromImage(qi) \
+            .scaled(new_imw, new_imh) \
+            .scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        geo = vp.geometry()
+        mx, my = self.coord2mousePos((new_x * factor_x, new_z * factor_z),
+                                     (geo.x(), geo.y(), geo.width(), geo.height()), (new_imw, new_imh))
+        qpx = self.draw_cross(qpx, (mx, my))
         vp.setPixmap(qpx)
+
+    def draw_cross(self, qpixmap, coord, spared_center_size=80, cross_length=200):
+
+        mx, my = coord
+        painter = QPainter()
+        painter.begin(qpixmap)
+        painter.setPen(self.pen)
+        painter.drawLine(QPoint(mx, my + spared_center_size), QPoint(mx, my + spared_center_size + cross_length))
+        painter.drawLine(QPoint(mx, my - spared_center_size), QPoint(mx, my - spared_center_size - cross_length))
+        painter.drawLine(QPoint(mx + spared_center_size, my), QPoint(mx + spared_center_size + cross_length, my))
+        painter.drawLine(QPoint(mx - spared_center_size, my), QPoint(mx - spared_center_size - cross_length, my))
+        painter.end()
+        return qpixmap
 
     def show_enable(self):
         self.setEnabled(True)
@@ -900,15 +961,11 @@ class MainViewer(QMainWindow):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         vp = self.frames.get_viewport(index)
         image_ind = vp.image_ind
-        # qpx = self.px_cache.get(image_ind, None)
-        # if not qpx:
-        #     qpx = self.preloading(image_ind)
-        if image_ind >= len(self.cache):
-            qi = QImage()
-        else:
-            qi = self.cache[image_ind]['qimage']
+        qpx = self.px_cache.get(image_ind, None)
+        if not qpx:
+            qpx = self.preloading(image_ind)
 
-        vp.setPixmap(QPixmap.fromImage(qi))
+        vp.setPixmap(qpx)
 
         self.show_lock.release()
 
@@ -984,12 +1041,13 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
-        # self.base_dir = r'E:\Nodule Detection\case CT'
-        self.base_dir = r'C:\CT_DICOM'
+        self.base_dir = r'E:\Nodule Detection\case CT'
+        # self.base_dir = r'C:\CT_DICOM'
         # self.file_list=OrderedDict
         # self.file_list_ind=-1
 
         self.load_local_dir()
+        # self.load_local_dir(r'1852138')
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
@@ -1009,6 +1067,7 @@ class ImageViewerApp(QApplication):
                     self.study_list[study][series].append(images)
                     image_list.append(images)
         self.total_study_count = len(self.study_list)
+
         self.study_index = found_study_name_index
         # threading.Thread(target=self.load_dicom, args=(image_list, )).start()
 
@@ -1152,7 +1211,10 @@ class ImageViewerApp(QApplication):
         f = dicom.read_file(path)
 
         s, i = f.RescaleSlope, f.RescaleIntercept
-        return np.array(f.pixel_array) * s + i
+        p = f.pixel_array
+        ret = np.array(p, np.uint16)
+        ret = (ret * s + i).astype(np.int16)
+        return ret
 
     def show_study(self, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -1169,6 +1231,9 @@ class ImageViewerApp(QApplication):
         # cl=clock()
         vp = viewer.frames.get_viewport(0)
         w, h = vp.width(), vp.height()
+        # im_w_f = w *1.0
+        # im_h = w
+
         for series, images in s.items():
             # viewer.cache[series] = OrderedDict()
             for image in images:
@@ -1179,9 +1244,11 @@ class ImageViewerApp(QApplication):
                 data = self.read_dicom(image)
                 # data = viewer.dicom_data[count]
                 gray = vp.apply_window(data)
-                qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
-                    w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
+                # gray = zoom(gray, (im_h, im_w), np.uint8)
+
+                # qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
+                #     w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                # )
                 # scaled=QPixmap.fromImage(qi).scaled(
                 #     vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 # qpx = QPixmap.fromImage(qi)
@@ -1194,7 +1261,7 @@ class ImageViewerApp(QApplication):
                 dic = {}
                 dic['data'] = data
                 dic['gray'] = gray
-                dic['qimage'] = qi
+                # dic['qimage'] = qi
                 # dic['qpixmap'] = qpx
                 dic['fullpath'] = image
                 # dic['scaled'] = scaled
@@ -1247,11 +1314,11 @@ class ImageViewerApp(QApplication):
                 continue
             nodule = []
             for i in range(1, 4):
-                nodule.append(int(line[i]))
-
-            if nodule[2] not in ret:
-                ret[nodule[2]] = []
-            ret[nodule[2]].append([nodule[0], nodule[1]])
+                nodule.append(int(line[i]) - 1)
+            z = nodule[2] - 1
+            if z not in ret:
+                ret[z] = []
+            ret[z].append([nodule[0], nodule[1]])
         self.viewers[0].saved_nodules = ret
 
     def load_old_hx(self, AccNo=None, win=None):
@@ -1349,7 +1416,7 @@ def getMyDocPath():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.WARNING)
     app = ImageViewerApp(sys.argv)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
