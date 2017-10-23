@@ -417,10 +417,10 @@ class MainViewer(QMainWindow):
         self.connect(self, SIGNAL('getCoord'), self.getCoord)
         self.connect(self, SIGNAL('preloading'), self.preloading)
         self.connect(self, SIGNAL('tooltip_hideText'), self.tooltip_hideText)
-        self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10,
-                            11, -11, 12, -12, 13, -13, 14, -14, 15, -15, 16, -16, 17, -17, 18, -18, 19, -19, 20, -20)
+        self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10)
+                            # 11, -11, 12, -12, 13, -13, 14, -14, 15, -15, 16, -16, 17, -17, 18, -18, 19, -19, 20, -20)
         self.preload_queue = SetQueue()
-        threading.Thread(target=self.preload_th).start()
+        # threading.Thread(target=self.preload_th).start()
         threading.Thread(target=self.preload_image_clean).start()
         self.prior_image_interval = -1
         self.saved_nodules = {}
@@ -457,7 +457,8 @@ class MainViewer(QMainWindow):
             if not ind in self.px_cache:
                 # threading.Thread(target=self.preloading, args=(ind,)).start()
                 # threading.Thread(target=lambda:self.emit(SIGNAL('preloading'), ind)).start()
-                self.preload_queue.put(ind)
+                # self.preload_queue.put(ind)
+                self.emit(SIGNAL('preloading'), ind)
                 # print 'preload_queue_put: %d' % (ind, )
 
                 # threading.Thread(target=self.preload_image_clean).start()
@@ -473,7 +474,7 @@ class MainViewer(QMainWindow):
         while (True):
             image_ind = self.frames.get_viewport(0).image_ind
             for k, v in self.px_cache.items():
-                if abs(k - image_ind) > 40:
+                if abs(k - image_ind) > 10:
                     self.px_cache.pop(k, None)
             sleep(0.5)
 
@@ -485,8 +486,11 @@ class MainViewer(QMainWindow):
         self.px_cache[image_ind] = True
         vp = self.frames.get_viewport(0)
         w, h = vp.width(), vp.height()
-        gray = self.cache[image_ind]['gray']
-        qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
+        # gray = self.cache[image_ind]['gray']
+        # qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
+        #     w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        # )
+        qi=self.cache[image_ind]['qimage'].scaled(
             w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         scaled = QPixmap.fromImage(qi)
@@ -973,11 +977,14 @@ class MainViewer(QMainWindow):
 
         self.show_lock.release()
 
-        self.this_image_interval = int(image_ind * 1.0 / 10)
-        if self.prior_image_interval != self.this_image_interval:
-            threading.Thread(target=self.preload_image).start()
-        self.prior_image_interval = self.this_image_interval
+        # self.this_image_interval = int(image_ind * 1.0 / 10)
+        # if self.prior_image_interval != self.this_image_interval:
+        #     threading.Thread(target=self.preload_image).start()
+        # self.prior_image_interval = self.this_image_interval
         self.showing = False
+
+        # threading.Thread(target=self.preload_image_clean, args=(image_ind, 10)).start()
+
         # Send_WM_COPYDATA(self.app.bridge_hwnd, json.dumps({'activateSimpleRIS': 1}), self.app.dwData)
 
     def preprocessing(self, image_label, image, scaled):
@@ -1045,13 +1052,13 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
-        # self.base_dir = r'E:\Nodule Detection\case CT'
-        self.base_dir = r'C:\CT_DICOM'
+        self.base_dir = r'E:\Nodule Detection\case CT'
+        # self.base_dir = r'C:\CT_DICOM'
         # self.file_list=OrderedDict
         # self.file_list_ind=-1
 
-        self.load_local_dir()
-        # self.load_local_dir(r'1852138')
+        # self.load_local_dir()
+        self.load_local_dir(r'1852138')
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
@@ -1234,11 +1241,12 @@ class ImageViewerApp(QApplication):
 
                     data = viewer.dicom_data[count]
                     gray = vp.apply_window(data)
+                    qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8)
 
                     dic = {}
                     dic['data'] = data
                     dic['gray'] = gray
-                    # dic['qimage'] = qi
+                    dic['qimage'] = qi
                     # dic['qpixmap'] = qpx
                     dic['fullpath'] = image
                     # dic['scaled'] = scaled
@@ -1251,11 +1259,14 @@ class ImageViewerApp(QApplication):
         study = int(study)
         # w = self.viewers[viewer]
         study_name = self.study_list.keys()[study]
+        print 'Study: %s' % (study_name,)
         s = self.study_list[study_name]
         viewer = self.viewers[0]
         viewer.cache = []
         viewer.px_all = []
+        viewer.px_cache={}
         viewer.dicom_data = []
+        cache=[]
         # self.viewers.
         # count = 0
         # cl=clock()
@@ -1273,7 +1284,13 @@ class ImageViewerApp(QApplication):
 
                 elif count == 20:
                     # threading.Thread(target=self.load_dicom, args=(study_name, 20)).start()
-                    threading.Thread(target=self.load_more_images, args=(study_name, 20)).start()
+                    try:
+                        self.load_more_images_th.terminate()
+                    except:
+                        pass
+                    viewer.cache=cache
+                    self.load_more_images_th=threading.Thread(target=self.load_more_images, args=(study_name, 20))
+                    self.load_more_images_th.start()
                     break
 
                 filename = os.path.basename(image)
@@ -1285,7 +1302,7 @@ class ImageViewerApp(QApplication):
                 data = viewer.dicom_data[count]
                 gray = vp.apply_window(data)
                 # gray = zoom(gray, (im_h, im_w), np.uint8)
-
+                qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8)
                 # qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
                 #     w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 # )
@@ -1301,11 +1318,11 @@ class ImageViewerApp(QApplication):
                 dic = {}
                 dic['data'] = data
                 dic['gray'] = gray
-                # dic['qimage'] = qi
+                dic['qimage'] = qi
                 # dic['qpixmap'] = qpx
                 dic['fullpath'] = image
                 # dic['scaled'] = scaled
-                viewer.cache.append(dic)
+                cache.append(dic)
 
 
                 #     viewer.volume = np.zeros((data.shape[1], data.shape[0], len(images)), np.uint8)
@@ -1336,7 +1353,7 @@ class ImageViewerApp(QApplication):
         viewer.dicom_info = dicom.read_file(image)
         viewer.next_image(0, 0)
         viewer.study_id = study_name
-        print 'Study: %s' % (study_name,)
+
         # viewer.process_cache()
         # viewer.preload_image()
         self.study_index = study
