@@ -418,7 +418,7 @@ class MainViewer(QMainWindow):
         self.connect(self, SIGNAL('preloading'), self.preloading)
         self.connect(self, SIGNAL('tooltip_hideText'), self.tooltip_hideText)
         self.preload_seq = (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10)
-                            # 11, -11, 12, -12, 13, -13, 14, -14, 15, -15, 16, -16, 17, -17, 18, -18, 19, -19, 20, -20)
+        # 11, -11, 12, -12, 13, -13, 14, -14, 15, -15, 16, -16, 17, -17, 18, -18, 19, -19, 20, -20)
         self.preload_queue = SetQueue()
         # threading.Thread(target=self.preload_th).start()
         threading.Thread(target=self.preload_image_clean).start()
@@ -429,7 +429,7 @@ class MainViewer(QMainWindow):
         self.brush = QBrush(Qt.red)
         self.dicom_data = []
         self.showing = False
-        self.painter=QPainter()
+        self.painter = QPainter()
         # self._define_global_shortcuts()
 
         # def keyPressEvent(self, QKeyEvent):
@@ -449,7 +449,7 @@ class MainViewer(QMainWindow):
 
     def preload_image(self):
         vp = self.frames.get_viewport(0)
-        image_ind = int(vp.image_ind * 1.0 / 10)*10
+        image_ind = int(vp.image_ind * 1.0 / 10) * 10
         l = len(self.cache)
         for i in self.preload_seq:
             ind = image_ind + i
@@ -491,7 +491,7 @@ class MainViewer(QMainWindow):
         # qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
         #     w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
         # )
-        qi=self.cache[image_ind]['qimage'].scaled(
+        qi = self.cache[image_ind]['qimage'].scaled(
             w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         # scaled = QPixmap.fromImage(qi)
@@ -529,9 +529,9 @@ class MainViewer(QMainWindow):
             #                     QPoint(mx + 45, my + 15),
             #                     QPoint(mx + 15, my + 45))
             painter.drawLine(mx + 15, my + 15, mx + 100, my + 100)
-            painter.drawPolygon(QPoint(mx , my ),
-                                QPoint(mx + 30, my ),
-                                QPoint(mx , my + 30))
+            painter.drawPolygon(QPoint(mx, my),
+                                QPoint(mx + 30, my),
+                                QPoint(mx, my + 30))
 
         painter.end()
         if show:
@@ -990,12 +990,12 @@ class MainViewer(QMainWindow):
         image_ind = vp.image_ind
         qi = self.qimage_cache.get(image_ind, None)
         if type(qi) is not QImage:
-        # if not qpx:
+            # if not qpx:
             # qpx = self.preloading(image_ind)
-            self.qimage_cache[image_ind]=None
+            self.qimage_cache[image_ind] = None
             qi = self.preloading(image_ind)
 
-        qpx=QPixmap.fromImage(qi)
+        qpx = QPixmap.fromImage(qi)
         vp.setPixmap(qpx)
         vp.pixmap = qpx
         if image_ind in self.saved_nodules:
@@ -1051,6 +1051,7 @@ class ImageViewerApp(QApplication):
         self.total_study_count = 0
         self.x = self.y = self.h = 0
         self.cache = {}
+        self.load_more_images_th_ev = threading.Event()
 
         # if self.total_viewer_count > 2:
         #     self.preload_count = self.total_viewer_count - 2
@@ -1258,7 +1259,9 @@ class ImageViewerApp(QApplication):
         vp = viewer.frames.get_viewport(0)
         for series, images in self.study_list[study_name].items():
             for count, image in enumerate(images):
-                if count >= from_image_index:
+                if self.load_more_images_th_ev.is_set():
+                    return
+                elif count >= from_image_index:
                     viewer.dicom_data.append(self.read_dicom(image))
                     filename = os.path.basename(image)
                     while count >= len(viewer.dicom_data):
@@ -1289,9 +1292,9 @@ class ImageViewerApp(QApplication):
         viewer = self.viewers[0]
         viewer.cache = []
         viewer.px_all = []
-        viewer.qimage_cache={}
+        viewer.qimage_cache = {}
         viewer.dicom_data = []
-        cache=[]
+        cache = []
         # self.viewers.
         # count = 0
         # cl=clock()
@@ -1310,11 +1313,13 @@ class ImageViewerApp(QApplication):
                 elif count == 20:
                     # threading.Thread(target=self.load_dicom, args=(study_name, 20)).start()
                     try:
-                        self.load_more_images_th.terminate()
+                        self.load_more_images_th_ev.set()
+                        self.load_more_images_th.join()
                     except:
                         pass
-                    viewer.cache=cache
-                    self.load_more_images_th=threading.Thread(target=self.load_more_images, args=(study_name, 20))
+                    viewer.cache = cache
+                    self.load_more_images_th_ev.clear()
+                    self.load_more_images_th = threading.Thread(target=self.load_more_images, args=(study_name, 20))
                     self.load_more_images_th.start()
                     break
 
