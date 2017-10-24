@@ -374,7 +374,7 @@ class MainViewer(QMainWindow):
         self.preloading_AccNo = ''
         self.app = app
         self.cache = []
-        self.px_cache = {}
+        self.qimage_cache = {}
         self.volume = []
         self.reset()
 
@@ -429,6 +429,7 @@ class MainViewer(QMainWindow):
         self.brush = QBrush(Qt.red)
         self.dicom_data = []
         self.showing = False
+        self.painter=QPainter()
         # self._define_global_shortcuts()
 
         # def keyPressEvent(self, QKeyEvent):
@@ -454,11 +455,11 @@ class MainViewer(QMainWindow):
             ind = image_ind + i
             if not 0 <= ind < l:
                 continue
-            if not ind in self.px_cache:
-                # threading.Thread(target=self.preloading, args=(ind,)).start()
+            if not ind in self.qimage_cache:
+                threading.Thread(target=self.preloading, args=(ind,)).start()
                 # threading.Thread(target=lambda:self.emit(SIGNAL('preloading'), ind)).start()
                 # self.preload_queue.put(ind)
-                self.emit(SIGNAL('preloading'), ind)
+                # self.emit(SIGNAL('preloading'), ind)
                 # print 'preload_queue_put: %d' % (ind, )
 
                 # threading.Thread(target=self.preload_image_clean).start()
@@ -473,17 +474,17 @@ class MainViewer(QMainWindow):
     def preload_image_clean(self):
         while (True):
             image_ind = self.frames.get_viewport(0).image_ind
-            for k, v in self.px_cache.items():
+            for k, v in self.qimage_cache.items():
                 if abs(k - image_ind) > 10:
-                    self.px_cache.pop(k, None)
+                    self.qimage_cache.pop(k, None)
             sleep(0.5)
 
     def preloading(self, image_ind):
-        loading_status = self.px_cache.get(image_ind, None)
+        loading_status = self.qimage_cache.get(image_ind, None)
         if loading_status is not None:
             return
 
-        self.px_cache[image_ind] = True
+        self.qimage_cache[image_ind] = True
         vp = self.frames.get_viewport(0)
         w, h = vp.width(), vp.height()
         # gray = self.cache[image_ind]['gray']
@@ -493,31 +494,48 @@ class MainViewer(QMainWindow):
         qi=self.cache[image_ind]['qimage'].scaled(
             w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        scaled = QPixmap.fromImage(qi)
+        # scaled = QPixmap.fromImage(qi)
 
-        if image_ind in self.saved_nodules:
-            geo = vp.geometry()
-            im_w, im_h = self.cache[0]['gray'].shape[1], self.cache[0]['gray'].shape[0]
 
-            painter = QPainter()
-            painter.begin(scaled)
-            painter.setPen(self.pen)
 
-            for nodule in self.saved_nodules[image_ind]:
-                mx, my = self.coord2mousePos((nodule[0], nodule[1]),
-                                             (geo.x(), geo.y(), geo.width(), geo.height()),
-                                             (im_w, im_h))
-
-                painter.drawLine(mx + 30, my + 30, mx + 100, my + 100)
-                painter.drawPolygon(QPoint(mx + 15, my + 15),
-                                    QPoint(mx + 45, my + 15),
-                                    QPoint(mx + 15, my + 45))
-
-            painter.end()
-
-        self.px_cache[image_ind] = scaled
+        # self.qimage_cache[image_ind] = scaled
+        self.qimage_cache[image_ind] = qi
         # print 'preloading: %d' % (image_ind, )
-        return scaled
+        # return scaled
+
+        return qi
+
+    def draw_nodule_arrow(self, qpx=None, show=True):
+
+        vp = self.frames.get_viewport(0)
+        image_ind = vp.image_ind
+        geo = vp.geometry()
+        im_w, im_h = self.cache[0]['gray'].shape[1], self.cache[0]['gray'].shape[0]
+
+        if qpx is None:
+            qpx = vp.pixmap
+
+        painter = self.painter
+        painter.begin(qpx)
+        painter.setPen(self.pen)
+
+        for nodule in self.saved_nodules[image_ind]:
+            mx, my = self.coord2mousePos((nodule[0], nodule[1]),
+                                         (geo.x(), geo.y(), geo.width(), geo.height()),
+                                         (im_w, im_h))
+
+            # painter.drawLine(mx + 30, my + 30, mx + 100, my + 100)
+            # painter.drawPolygon(QPoint(mx + 15, my + 15),
+            #                     QPoint(mx + 45, my + 15),
+            #                     QPoint(mx + 15, my + 45))
+            painter.drawLine(mx + 15, my + 15, mx + 100, my + 100)
+            painter.drawPolygon(QPoint(mx , my ),
+                                QPoint(mx + 30, my ),
+                                QPoint(mx , my + 30))
+
+        painter.end()
+        if show:
+            vp.setPixmap(qpx)
 
     def setHotkey(self):
         # QShortcut(QKeySequence('Ctrl+C'), self.frames.get_viewport(0), partial(self.next_image, 0))
@@ -553,7 +571,7 @@ class MainViewer(QMainWindow):
             self.localize(x, y)
         else:
             # print '%d, %d, %d' % (x, y, vp.image_ind+1)
-            self.save_nodule(x, y, vp.image_ind + 1)
+            self.save_nodule(x, y, vp.image_ind)
 
     def save_nodule(self, x, y, z):
         with codecs.open(os.path.join(self.app.base_dir, 'output.txt'), 'a', 'utf-8') as text_file:
@@ -564,6 +582,7 @@ class MainViewer(QMainWindow):
         if z not in self.saved_nodules:
             self.saved_nodules[z] = []
         self.saved_nodules[z].append([x, y])
+        self.draw_nodule_arrow()
 
     def mousePos2Coord(self, mousePos=(0, 0), viewport_dim=(0, 0, 2048, 2560), image_dim=(512, 512)):
         '''
@@ -969,18 +988,24 @@ class MainViewer(QMainWindow):
         self.showing = True
         vp = self.frames.get_viewport(index)
         image_ind = vp.image_ind
-        qpx = self.px_cache.get(image_ind, None)
-        if not qpx:
-            qpx = self.preloading(image_ind)
+        qi = self.qimage_cache.get(image_ind, None)
+        if type(qi) is not QImage:
+        # if not qpx:
+            # qpx = self.preloading(image_ind)
+            self.qimage_cache[image_ind]=None
+            qi = self.preloading(image_ind)
 
+        qpx=QPixmap.fromImage(qi)
         vp.setPixmap(qpx)
-
+        vp.pixmap = qpx
+        if image_ind in self.saved_nodules:
+            self.draw_nodule_arrow(qpx)
         self.show_lock.release()
 
-        # self.this_image_interval = int(image_ind * 1.0 / 10)
-        # if self.prior_image_interval != self.this_image_interval:
-        #     threading.Thread(target=self.preload_image).start()
-        # self.prior_image_interval = self.this_image_interval
+        self.this_image_interval = int(image_ind * 1.0 / 10)
+        if self.prior_image_interval != self.this_image_interval:
+            threading.Thread(target=self.preload_image).start()
+        self.prior_image_interval = self.this_image_interval
         self.showing = False
 
         # threading.Thread(target=self.preload_image_clean, args=(image_ind, 10)).start()
@@ -1058,7 +1083,7 @@ class ImageViewerApp(QApplication):
         # self.file_list_ind=-1
 
         # self.load_local_dir()
-        self.load_local_dir(r'1852138')
+        self.load_local_dir(r'2526762_CHEN_GL_F39_C')
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
@@ -1264,7 +1289,7 @@ class ImageViewerApp(QApplication):
         viewer = self.viewers[0]
         viewer.cache = []
         viewer.px_all = []
-        viewer.px_cache={}
+        viewer.qimage_cache={}
         viewer.dicom_data = []
         cache=[]
         # self.viewers.
@@ -1331,7 +1356,7 @@ class ImageViewerApp(QApplication):
                 # elif count <= 10:
                 #     qpx = QPixmap.fromImage(qi)
                 #     scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                #     viewer.px_cache[count] = scaled
+                #     viewer.qimage_cache[count] = scaled
                 # else:
                 #     break
                 # elif count > 30:
@@ -1347,7 +1372,7 @@ class ImageViewerApp(QApplication):
 
         # vp.emit(SIGNAL('setPixmap'), scaled)
         # print clock()-cl
-        # viewer.px_cache[count] = scaled
+        # viewer.qimage_cache[count] = scaled
         # vp.image_ind = 0
         vp.image_ind = 0
         viewer.dicom_info = dicom.read_file(image)
