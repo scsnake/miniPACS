@@ -1,22 +1,26 @@
 # -*- coding: utf-8 -*-
 
-import os, glob, sys
+import ctypes.wintypes
+import glob
+import inspect
+import json
+import logging
+import os
+import sys
 import threading
 from collections import OrderedDict
-from screeninfo import get_monitors
-from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QGraphicsScene, QLabel, QPalette, QImage
-from PyQt4.QtGui import QPixmap, QPainter, QGraphicsPixmapItem, QAction, QKeySequence, QDesktopWidget, QFont
-from PyQt4.QtGui import QVBoxLayout, QWidget, QSizePolicy, QFrame, QBrush, QColor
-from PyQt4.QtCore import QTimer, QObject, QSize, Qt, QRectF, SIGNAL, QCoreApplication, QString
-from time import sleep, clock
-from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
-import SetWindowPos
-import json
-import logging, inspect
 from functools import partial
+from time import sleep, clock
+
 import cv2
 import numpy as np
-import ctypes.wintypes
+from PyQt4.QtCore import Qt, SIGNAL, QString
+from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QLabel, QImage
+from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont
+from PyQt4.QtGui import QWidget, QSizePolicy
+from screeninfo import get_monitors
+
+from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
 
 class ImageLabel(QLabel):
@@ -32,6 +36,7 @@ class ImageLabel(QLabel):
         mag_label.hide()
         self.mag_label = mag_label
         self.cal_th = None
+        self.cal_th_ev = threading.Event()
         self.calculating = False
         self.is_sharp_image = False
         # self.setMouseTracking(True)
@@ -52,9 +57,9 @@ class ImageLabel(QLabel):
     def mouseReleaseEvent(self, QMouseEvent):
         if QMouseEvent.button() == Qt.LeftButton or QMouseEvent.button() == Qt.RightButton:
             try:
-                self.cal_th.terminate()
-                self.original_image_processing_th.cancel()
-                self.original_image_processing_th.terminate()
+                self.cal_th_ev.set()
+                self.cal_th.join()
+                self.original_image_processing_tm.cancel()
             except:
                 pass
             finally:
@@ -71,6 +76,7 @@ class ImageLabel(QLabel):
                 target = self.cal_brightness_contrast
             else:
                 target = self.cal_zoomin
+            self.cal_th_ev.clear()
             th = threading.Thread(target=target, args=(QMouseEvent.x(), QMouseEvent.y()))
             th.start()
             self.cal_th = th
@@ -87,7 +93,7 @@ class ImageLabel(QLabel):
         self.base_px = QPixmap.fromImage(
             QImage(self.base_image.data, self.base_image.shape[1], self.base_image.shape[0],
                    self.base_image.shape[1], QImage.Format_Indexed8) \
-            .scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                .scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         # print clock() - cl
         self.setPixmap(self.base_px)
 
@@ -117,9 +123,13 @@ class ImageLabel(QLabel):
         h = int(np.floor(self.base_image.shape[0] / ratio))
 
         v = np.ascontiguousarray(self.base_image[y:(y + h), x:(x + w)])
+        if self.cal_th_ev.is_set():
+            return
+
         im2 = QImage(v.data, v.shape[1], v.shape[0],
                      v.shape[1], QImage.Format_Indexed8)
-
+        if self.cal_th_ev.is_set():
+            return
         self.emit(SIGNAL('set_pixmap_qimage'), im2)
 
     def cal_brightness_contrast(self, mouseX, mouseY, use_downsampled=True):
@@ -137,27 +147,30 @@ class ImageLabel(QLabel):
         v[v < 0] = 0
         v[v > 255] = 255
         v = v.astype(np.uint8)
+        if self.cal_th_ev.is_set():
+            return
         im2 = QImage(v.data, using_image.shape[1], using_image.shape[0],
                      using_image.shape[1], QImage.Format_Indexed8)
-
+        if self.cal_th_ev.is_set():
+            return
         self.emit(SIGNAL('set_pixmap_qimage'), im2)
 
         if use_downsampled:
             try:
-                self.original_image_processing_th.cancel()
-                self.original_image_processing_th.terminate()
+                self.original_image_processing_tm.cancel()
             except:
                 pass
             finally:
                 th = threading.Timer(0.05, self.cal_brightness_contrast, [mouseX, mouseY, False])
                 th.start()
-                self.original_image_processing_th = th
+                self.original_image_processing_tm = th
 
                 # print clock() - cl
 
     def set_pixmap_qimage(self, im):
         # self.setPixmap(QPixmap.fromImage(im))
-        self.setPixmap(QPixmap.fromImage(im.scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+        self.setPixmap(QPixmap.fromImage(
+            im.scaled(self.fixedWidth, self.fixedHeight, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
 
     def sigmoid(self, x):
         return 1 + x / (1 + abs(x))
@@ -400,9 +413,10 @@ class ImageViewer(QMainWindow):
 
     def reset(self):
         try:
-            map(lambda x: x.terminate(), self.load_threads)
             map(lambda x: x.clear(), self.image_labels)
             map(lambda x: x.count_label.setText(''), self.image_labels)
+            self.load_threads_ev.set()
+            map(lambda x: x.join(), self.load_threads)
         except:
             pass
         self.old_hx = ''
@@ -569,14 +583,13 @@ class ImageViewer(QMainWindow):
         image_label.count_label.setText('%d / %d' % (image_ind + 1,
                                                      self.expected_image_count[index][AccNo]))
         try:
-            image_label.count_label.hide_label_th.cancel()
-            image_label.count_label.hide_label_th.terminate()
+            image_label.count_label.hide_label_tm.cancel()
         except:
             pass
         finally:
             th = threading.Timer(1, lambda i: self.emit(SIGNAL('hide_count_label'), i), [index])
             th.start()
-            image_label.count_label.hide_label_th = th
+            image_label.count_label.hide_label_tm = th
 
         try:
             image_path = glob.glob(os.path.join(self.folder, AccNo + ' ??????? ' + str(image_ind + 1) + '.jpeg'))[0]
@@ -651,7 +664,7 @@ class ImageViewerApp(QApplication):
         self.study_index = -1
         self.total_viewer_count = totalViewer
         self.study_list = {}
-        self.preload_threads = []
+        self.preload_timers = []
         # self.study_list_lock = threading.Lock()
         self.show_study_lock = threading.Lock()
         self.load_thread_lock = threading.Lock()
@@ -659,6 +672,7 @@ class ImageViewerApp(QApplication):
         self.old_hx_list = {}
         self.AccNo = ''
         self.old_hx_threads = []
+        self.old_hx_threads_ev = threading.Event()
         self.fast_mode = False
         self.total_study_count = 0
         self.x = self.y = self.h = 0
@@ -784,16 +798,15 @@ class ImageViewerApp(QApplication):
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
         try:
-            map(lambda t: t.cancel(), self.preload_threads)
-            map(lambda t: t.terminate(), self.preload_threads)
+            map(lambda t: t.cancel(), self.preload_timers)
         except:
             pass
         finally:
-            self.preload_threads = []
+            self.preload_timers = []
             for i in range(self.preload_count):
                 th = threading.Timer(i + 1, partial(self.preload, i + 1))
                 th.start()
-                self.preload_threads.append(th)
+                self.preload_timers.append(th)
 
     def prior_study(self):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -852,7 +865,7 @@ class ImageViewerApp(QApplication):
         w.emit(SIGNAL('show_count_label'), 0)
         th = threading.Timer(1, lambda i: w.emit(SIGNAL('hide_count_label'), i), [0])
         th.start()
-        w.image_labels[0].count_label.hide_label_th = th
+        w.image_labels[0].count_label.hide_label_tm = th
 
         self.viewer_index = viewer
         self.study_index = study
@@ -865,10 +878,12 @@ class ImageViewerApp(QApplication):
 
         if not self.fast_mode:
             try:
-                map(lambda t: t.terminate(), self.old_hx_threads)
+                self.old_hx_threads_ev.set()
+                map(lambda t: t.join(), self.old_hx_threads)
             except:
                 pass
             finally:
+                self.old_hx_threads_ev.clear()
                 th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
                 th.start()
                 self.old_hx_threads.append(th)
@@ -880,7 +895,9 @@ class ImageViewerApp(QApplication):
         if win is None:
             win = self.viewers[self.viewer_index]
         while True:
-            if AccNo in self.old_hx_list:
+            if self.old_hx_threads_ev.is_set():
+                return
+            elif AccNo in self.old_hx_list:
                 old_hx = self.old_hx_list[AccNo]
                 win.old_hx = old_hx.strip()
 
