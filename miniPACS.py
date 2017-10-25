@@ -209,7 +209,7 @@ class ProgressWin(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.connect(self, SIGNAL('update_text'), self.update_text)
-        self.connect(self, SIGNAL('show'), self.show)
+        self.connect(self, SIGNAL('show'), self.show_self)
 
     def next_study(self):
         cl = clock()
