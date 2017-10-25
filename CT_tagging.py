@@ -1084,23 +1084,36 @@ class ImageViewerApp(QApplication):
         # self.file_list_ind=-1
 
         # self.load_local_dir()
-        self.load_local_dir(r'2526762_CHEN_GL_F39_C')
+        self.load_local_dir(r'5045612')
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
         found_study_name_index = 0
         i = 0
         for study in os.listdir(self.base_dir):
-            if not os.path.isdir(os.path.join(self.base_dir, study)):
+            study_dir=os.path.join(self.base_dir, study)
+            if not os.path.isdir(study_dir):
                 continue
             if from_study_name == study and found_study_name_index == 0:
                 found_study_name_index = i
             i += 1
             self.study_list[study] = OrderedDict()
-            for series in os.listdir(os.path.join(self.base_dir, study)):
+            for series in os.listdir(study_dir):
+                series_dir = os.path.join(study_dir, series)
+                if not os.path.isdir(series_dir):
+                    continue
                 self.study_list[study][series] = []
-                for images in sorted(glob.glob(os.path.join(self.base_dir, study, series, '*.dcm'))):
+                for images in sorted(glob.glob(os.path.join(series_dir, '*.dcm'))):
                     self.study_list[study][series].append(images)
+                for subdir in os.listdir(series_dir):
+                    if len(self.study_list[study][series]) != 0:
+                        break
+                    subdirname = os.path.join(series_dir, subdir)
+                    if not os.path.isdir(subdirname):
+                        continue
+                    for images in sorted(glob.glob(os.path.join(subdirname, '*.dcm'))):
+                        self.study_list[study][series].append(images)
+
         self.total_study_count = len(self.study_list)
 
         self.study_index = found_study_name_index
