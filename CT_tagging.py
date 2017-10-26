@@ -22,6 +22,7 @@ from PyQt4.QtGui import QApplication, QMainWindow, QMessageBox, QLabel, QImage, 
 from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont, QToolTip
 from PyQt4.QtGui import QWidget, QCursor
 from screeninfo import get_monitors
+from scipy.ndimage.interpolation import zoom
 
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
@@ -728,7 +729,13 @@ class MainViewer(QMainWindow):
             sag = np.delete(sag, np.s_[i - 1:], 0)
             cor = np.delete(cor, np.s_[i - 1:], 0)
 
-        # print x_range
+        mag_factor=4
+        sag=zoom(sag, (mag_factor,mag_factor))
+        cor=zoom(cor, (mag_factor,mag_factor))
+        new_x*=mag_factor
+        new_y*=mag_factor
+        new_z*=mag_factor
+               # print x_range
         # print y_range
         new_imw, new_imh = int(round(sag.shape[1] * factor_y)), int(round(sag.shape[0] * factor_z))
         vp = self.frames.get_viewport(1)
@@ -1084,7 +1091,7 @@ class ImageViewerApp(QApplication):
         # self.file_list_ind=-1
 
         # self.load_local_dir()
-        self.load_local_dir(r'5069893')
+        self.load_local_dir(r'5340193')
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
