@@ -1275,12 +1275,16 @@ class ImageViewerApp(QApplication):
         for series, images in self.study_list[study_name].items():
             for count, image in enumerate(images):
                 if self.load_more_images_th_ev.is_set():
+                    viewer.cache=[]
                     return
                 elif count >= from_image_index:
                     viewer.dicom_data.append(self.read_dicom(image))
                     filename = os.path.basename(image)
                     while count >= len(viewer.dicom_data):
                         sleep(0.1)
+                        if self.load_more_images_th_ev.is_set():
+                            viewer.cache = []
+                            return
 
                     data = viewer.dicom_data[count]
                     gray = vp.apply_window(data)
@@ -1295,6 +1299,7 @@ class ImageViewerApp(QApplication):
                     # dic['scaled'] = scaled
                     viewer.cache.append(dic)
             break
+
 
     def show_study(self, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
