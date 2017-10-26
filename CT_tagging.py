@@ -1084,13 +1084,15 @@ class ImageViewerApp(QApplication):
         # self.file_list_ind=-1
 
         # self.load_local_dir()
-        self.load_local_dir(r'5045612')
+        self.load_local_dir(r'5069893')
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def load_local_dir(self, from_study_name=''):
         found_study_name_index = 0
         i = 0
+        self.base_dir = unicode(self.base_dir)
         for study in os.listdir(self.base_dir):
+            # print study
             study_dir=os.path.join(self.base_dir, study)
             if not os.path.isdir(study_dir):
                 continue
