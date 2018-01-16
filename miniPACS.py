@@ -19,6 +19,7 @@ from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QLabe
 from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont
 from PyQt4.QtGui import QWidget, QSizePolicy
 from screeninfo import get_monitors
+import statistics as stat
 
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
@@ -215,14 +216,21 @@ class ProgressWin(QWidget):
         cl = clock()
         t = (cl - self.pTick) * 1.0
         self.read_time.append(t)
-        self.read_time_sum += t
         self.read_count += 1
-        m = self.read_time_sum * 1.0 / self.read_count
-        self.read_time_mean = m
-        sd = (sum([(i - m) ** 2 for i in self.read_time]) / self.read_count) ** 0.5
-        self.read_time_sd = sd
+
+        if self.read_count == 1:
+            self.read_time_mean = t
+        else:
+            self.read_time_sd = stat.stdev(self.read_time)
+            mean = stat.mean(self.read_time)
+            in_range = [t for t in self.read_time if abs(t - mean) < 2 * self.read_time_sd]
+
+            self.read_time_mean = stat.mean(in_range)
+
         etr = int((self.total_count - self.read_count) * self.read_time_mean)
-        if etr < 60:
+        if etr < 0:
+            self.estimated_time_remaining = ''
+        elif etr < 60:
             self.estimated_time_remaining = '%d s' % (etr,)
         else:
             s = etr % 60
@@ -756,12 +764,13 @@ class ImageViewerApp(QApplication):
                 Send_WM_COPYDATA(self.bridge_hwnd, json.dumps(d), ImageViewerApp.dwData)
                 if json_data['from'] == 'open_impax':
                     self.emit(SIGNAL('hide_all'))
-                elif json_data['from'] == 'sendReport':
-                    self.progressWin.next_study()
+            elif 'sendReportEnd' in json_data:
+                self.progressWin.next_study()
             elif 'fast_mode' in json_data:
                 self.fast_mode = bool(json_data['fast_mode'])
             elif 'start_from' in json_data:
                 self.emit(SIGNAL('next_study'), json_data['start_from'])
+
 
 
         except Exception as e:
@@ -829,9 +838,11 @@ class ImageViewerApp(QApplication):
         msg.setWindowTitle("miniPACS")
         msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
         msg.setDefaultButton(QMessageBox.Ok)
+        msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
 
         if msg.exec_() == QMessageBox.Ok:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
+            sys.exit(0)
 
     def show_study(self, viewer, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
