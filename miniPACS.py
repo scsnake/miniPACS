@@ -846,11 +846,16 @@ class ImageViewerApp(QApplication):
 
     def show_study(self, viewer, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
+
         viewer = int(viewer)
         study = int(study)
+
         w = self.viewers[viewer]
         s = self.study_list[study]
         AccNo = s['AccNo']
+
+        Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'showStudy': 1, 'index': study, 'AccNo': AccNo}), ImageViewerApp.dwData)
+
         c = self.viewers[self.viewer_index]
 
         if w.AccNo != AccNo and w.preloading_AccNo != AccNo:
