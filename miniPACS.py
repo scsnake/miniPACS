@@ -14,12 +14,12 @@ from time import sleep, clock
 
 import cv2
 import numpy as np
+import statistics as stat
 from PyQt4.QtCore import Qt, SIGNAL, QString
 from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QLabel, QImage
 from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont
 from PyQt4.QtGui import QWidget, QSizePolicy
 from screeninfo import get_monitors
-import statistics as stat
 
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
@@ -770,12 +770,23 @@ class ImageViewerApp(QApplication):
                 self.fast_mode = bool(json_data['fast_mode'])
             elif 'start_from' in json_data:
                 self.emit(SIGNAL('next_study'), json_data['start_from'])
+            elif 'reset_all' in json_data:
+                self.reset_data()
 
 
 
         except Exception as e:
             print e
             return
+
+    def reset_all(self):
+        self.viewer_index = -1
+        self.study_index = -1
+        self.study_list = {}
+        self.old_hx_list = {}
+        self.AccNo = ''
+        self.fast_mode = False
+        self.total_study_count = 0
 
     def next_study(self, from_ind=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
