@@ -193,6 +193,7 @@ class ProgressWin(QWidget):
         self.read_time = []
         self.read_time_sum = 0
         self.read_time_mean = 0
+        self.read_time_sd = 0
         self.estimated_time_remaining = 0
         self.pTick = 0
 
@@ -212,6 +213,16 @@ class ProgressWin(QWidget):
         self.connect(self, SIGNAL('update_text'), self.update_text)
         self.connect(self, SIGNAL('show'), self.show_self)
 
+    def reset_data(self):
+        self.total_count = 0
+        self.read_count = 0
+        self.read_time = []
+        self.read_time_sum = 0
+        self.read_time_mean = 0
+        self.read_time_sd = 0
+        self.estimated_time_remaining = 0
+        self.pTick = 0
+
     def next_study(self):
         cl = clock()
         t = (cl - self.pTick) * 1.0
@@ -220,6 +231,7 @@ class ProgressWin(QWidget):
 
         if self.read_count == 1:
             self.read_time_mean = t
+
         else:
             self.read_time_sd = stat.stdev(self.read_time)
             mean = stat.mean(self.read_time)
@@ -779,7 +791,7 @@ class ImageViewerApp(QApplication):
             print e
             return
 
-    def reset_all(self):
+    def reset_data(self):
         self.viewer_index = -1
         self.study_index = -1
         self.study_list = {}
@@ -787,6 +799,12 @@ class ImageViewerApp(QApplication):
         self.AccNo = ''
         self.fast_mode = False
         self.total_study_count = 0
+        try:
+            self.next_study_timer.cancel()
+        except:
+            pass
+        self.old_hx_threads_ev.clear()
+        self.progressWin.reset_data()
 
     def next_study(self, from_ind=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -808,7 +826,12 @@ class ImageViewerApp(QApplication):
             self.emit(SIGNAL('show_dialog'))
             return
         if not thisStudyInd in self.study_list:
-            threading.Timer(0.5, self.next_study, [from_ind]).start()
+            try:
+                self.next_study_timer.cancel()
+            except:
+                pass
+            self.next_study_timer=threading.Timer(0.5, self.next_study, [from_ind])
+            self.next_study_timer.start()
             self.show_study_lock.release()
             return
 
@@ -845,15 +868,15 @@ class ImageViewerApp(QApplication):
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Information)
 
-        msg.setText("Already last study!\nExit?")
+        msg.setText("Already last study!")
         msg.setWindowTitle("miniPACS")
-        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        msg.setStandardButtons(QMessageBox.Ok)
         msg.setDefaultButton(QMessageBox.Ok)
         msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
 
-        if msg.exec_() == QMessageBox.Ok:
-            Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
-            sys.exit(0)
+        # if msg.exec_() == QMessageBox.Ok:
+        #     Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
+        #     sys.exit(0)
 
     def show_study(self, viewer, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -863,7 +886,10 @@ class ImageViewerApp(QApplication):
 
         w = self.viewers[viewer]
         s = self.study_list[study]
+
         AccNo = s['AccNo']
+
+
 
         Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'showStudy': 1, 'index': study, 'AccNo': AccNo}), ImageViewerApp.dwData)
 
@@ -907,8 +933,6 @@ class ImageViewerApp(QApplication):
             try:
                 self.old_hx_threads_ev.set()
                 map(lambda t: t.join(), self.old_hx_threads)
-            except:
-                pass
             finally:
                 self.old_hx_threads_ev.clear()
                 th = threading.Thread(target=partial(self.load_old_hx, AccNo, w))
