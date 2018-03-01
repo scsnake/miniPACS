@@ -25,7 +25,7 @@ from PyQt4.QtGui import QWidget, QCursor
 from screeninfo import get_monitors
 from scipy.ndimage.interpolation import zoom
 
-from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
+# from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
 
 # from scipy.ndimage import zoom
@@ -703,7 +703,7 @@ class MainViewer(QMainWindow):
 
     def localize(self, x, y):
         try:
-            z_sp = getattr(self.dicom_info, 'SpacingBetweenSlices', self.dicom_info.SliceThickness)
+            z_sp = abs(getattr(self.dicom_info, 'SpacingBetweenSlices', self.dicom_info.SliceThickness))
             x_sp, y_sp = self.dicom_info.PixelSpacing
         except:
             z_sp = x_sp = y_sp = 1
@@ -1073,7 +1073,7 @@ class ImageViewerApp(QApplication):
     def __init__(self, list, base_dir, init_at):
         super(ImageViewerApp, self).__init__(list)
         self.screen_count = QDesktopWidget().screenCount()
-        self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
+        # self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
         # self.folder_path = folderPath
         self.viewers = []
         self.viewer_index = -1
@@ -1115,6 +1115,7 @@ class ImageViewerApp(QApplication):
 
         self.connect(self, SIGNAL('show_study'), self.show_study)
         self.connect(self, SIGNAL('next_study'), self.next_study)
+        self.connect(self, SIGNAL('prior_study'), self.prior_study)
         self.connect(self, SIGNAL('activate_main'), self.activate_main)
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
@@ -1129,12 +1130,14 @@ class ImageViewerApp(QApplication):
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
 
     def sort_file_num(self, name):
-        n, _ =os.path.splitext(name)
-        match= re.search('\d+$', n)
-        if match:
-            return int(match.group())
-        else:
-            return name
+        n, _ =os.path.splitext(os.path.basename(name))
+        n=re.sub('^[\.\d]+', '', n)
+        n=re.sub('[^\.\d]', '', n)
+        n=n.split('.')
+        a=0
+        for i, d in enumerate(n):
+            a+=int(d)* (10000**(len(n)-i-1))
+        return int(a)
 
 
     def load_local_dir(self, from_study_name=''):
@@ -1311,9 +1314,8 @@ class ImageViewerApp(QApplication):
             print 'Beyond first study!'
             self.show_study_lock.release()
             return
-        thisViewerInd = self.prior_index(self.viewer_index, self.total_viewer_count)
 
-        self.show_study(viewer=thisViewerInd, study=thisStudyInd)
+        self.emit(SIGNAL('show_study'), thisStudyInd, True)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
     def show_dialog(self):
@@ -1421,7 +1423,7 @@ class ImageViewerApp(QApplication):
                         self.load_more_images_th.join()
                     except:
                         pass
-                    viewer.cache = cache
+                    # viewer.cache = cache
                     self.load_more_images_th_ev.clear()
                     self.load_more_images_th = threading.Thread(target=self.load_more_images, args=(study_name, 20))
                     self.load_more_images_th.start()
@@ -1456,7 +1458,7 @@ class ImageViewerApp(QApplication):
                 # dic['qpixmap'] = qpx
                 dic['fullpath'] = image
                 # dic['scaled'] = scaled
-                cache.append(dic)
+                viewer.cache.append(dic)
 
 
                 #     viewer.volume = np.zeros((data.shape[1], data.shape[0], len(images)), np.uint8)
@@ -1613,8 +1615,8 @@ def getMyDocPath():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
-    base_dir=r'E:\STAS\STAS negative'
-    init_at=r'1180973_20160107'
+    base_dir=r'D:\Users\ntuhuser\Documents\saveDicom\STAS positive thin'
+    init_at=r'3248559_20161119'
     app = ImageViewerApp(sys.argv, base_dir, init_at)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
