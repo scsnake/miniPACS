@@ -612,7 +612,7 @@ class MainViewer(QMainWindow):
         print s
         if series_no not in self.saved_nodules:
             self.saved_nodules[series_no] = {}
-        if z not in self.saved_nodules:
+        if z not in self.saved_nodules[series_no]:
             self.saved_nodules[series_no][z] = []
         self.saved_nodules[series_no][z].append([x, y])
         self.draw_nodule_arrow()
@@ -1333,7 +1333,7 @@ class ImageViewerApp(QApplication):
     def read_dicom(self, path):
         f = dicom.read_file(path, force=True)
 
-        s, i = f.RescaleSlope, f.RescaleIntercept
+        s, i = f.get('RescaleSlope', 1), f.get('RescaleIntercept', -1024)
         p = f.pixel_array
         ret = np.array(p, np.uint16)
         ret = (ret * s + i).astype(np.int16)
@@ -1615,8 +1615,8 @@ def getMyDocPath():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
-    base_dir=r'D:\Users\ntuhuser\Documents\saveDicom\STAS positive thin'
-    init_at=r'3248559_20161119'
+    base_dir=r'D:\Users\ntuhuser\Documents\saveDicom\STAS negative thin'
+    init_at=r'6271531_20160225'
     app = ImageViewerApp(sys.argv, base_dir, init_at)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
