@@ -220,6 +220,7 @@ class ProgressWin(QWidget):
 
         if self.read_count == 1:
             self.read_time_mean = t
+            self.read_time_sd=0
         else:
             self.read_time_sd = stat.stdev(self.read_time)
             mean = stat.mean(self.read_time)
@@ -813,7 +814,7 @@ class ImageViewerApp(QApplication):
         finally:
             self.preload_timers = []
             for i in range(self.preload_count):
-                th = threading.Timer(i + 1, partial(self.preload, i + 1))
+                th = threading.Timer((i + 1)/2.0, partial(self.preload, i + 1))
                 th.start()
                 self.preload_timers.append(th)
 
