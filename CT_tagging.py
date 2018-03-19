@@ -1097,7 +1097,7 @@ class MainViewer(QMainWindow):
 
         series_no, ind = self.image_ind_to_series_number(image_ind)
         if series_no in self.saved_nodules and ind in self.saved_nodules[series_no]:
-            self.draw_nodule_arrow(qpx, series_no=series_no, ind=ind)
+            self.draw_nodule_arrow(vp.pixmap, series_no=series_no, ind=ind)
         self.show_lock.release()
 
         # if not hasattr(self, 'prior_image_ind') or image_ind>self.prior_image_ind:
@@ -1730,7 +1730,7 @@ def getMyDocPath():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
     base_dir=r'D:\ming_CT_new'
-    init_at=r'13614193285030155'
+    init_at=r'13614193285030201'
     app = ImageViewerApp(sys.argv, base_dir, init_at)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
