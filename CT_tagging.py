@@ -456,11 +456,13 @@ class MainViewer(QMainWindow):
         vp = self.frames.get_viewport(0)
         image_ind = int(vp.image_ind * 1.0 / 10) * 10
         l = len(self.cache)
+        j=0
         for i in self.preload_seq:
             ind = image_ind + i
             if not 0 <= ind < l:
                 continue
             if not ind in self.qimage_cache:
+
                 threading.Thread(target=self.preloading, args=(ind,)).start()
                 # threading.Thread(target=lambda:self.emit(SIGNAL('preloading'), ind)).start()
                 # self.preload_queue.put(ind)
@@ -484,7 +486,11 @@ class MainViewer(QMainWindow):
                     self.qimage_cache.pop(k, None)
             sleep(0.5)
 
-    def preloading(self, image_ind):
+    def preloading(self, image_ind, show=False):
+        l = len(self.cache)
+        if not 0 <= image_ind < l:
+            return
+
         loading_status = self.qimage_cache.get(image_ind, None)
         if loading_status is not None:
             return
@@ -517,6 +523,11 @@ class MainViewer(QMainWindow):
         self.qimage_cache[image_ind] = qi
         # print 'preloading: %d' % (image_ind, )
         # return scaled
+        if show:
+            qpx = QPixmap.fromImage(qi)
+
+            vp.setPixmap(qpx)
+            vp.pixmap = qpx
 
         return qi
 
@@ -1071,25 +1082,37 @@ class MainViewer(QMainWindow):
         vp = self.frames.get_viewport(index)
         image_ind = vp.image_ind
         qi = self.qimage_cache.get(image_ind, None)
+
         if type(qi) is not QImage:
             # if not qpx:
             # qpx = self.preloading(image_ind)
             self.qimage_cache[image_ind] = None
-            qi = self.preloading(image_ind)
+            qi= self.preloading(image_ind, show=True)
 
-        qpx = QPixmap.fromImage(qi)
-        vp.setPixmap(qpx)
-        vp.pixmap = qpx
+        else:
+            qpx = QPixmap.fromImage(qi)
+
+            vp.setPixmap(qpx)
+            vp.pixmap = qpx
 
         series_no, ind = self.image_ind_to_series_number(image_ind)
         if series_no in self.saved_nodules and ind in self.saved_nodules[series_no]:
             self.draw_nodule_arrow(qpx, series_no=series_no, ind=ind)
         self.show_lock.release()
 
+        # if not hasattr(self, 'prior_image_ind') or image_ind>self.prior_image_ind:
+        #     threading.Thread(target=self.preloading, args=(image_ind+1,)).start()
+        #
+        # else:
+        #     threading.Thread(target=self.preloading, args=(image_ind - 1,)).start()
+        # self.prior_image_ind=image_ind
+
         self.this_image_interval = int(image_ind * 1.0 / 10)
         if self.prior_image_interval != self.this_image_interval:
             threading.Thread(target=self.preload_image).start()
+            # threading.Timer(0.5, self.preload_image).start()
         self.prior_image_interval = self.this_image_interval
+
         self.showing = False
 
         # threading.Thread(target=self.preload_image_clean, args=(image_ind, 10)).start()
@@ -1239,12 +1262,12 @@ class ImageViewerApp(QApplication):
             elif load_all and study not in self.study_list:
                 self.study_list[study]=OrderedDict()
             i += 1
-            if found_study_name_index>-1 and load_all:
-                j+=1
-                if (study not in self.study_list or not self.study_list[study]) and study not in self.load_local_dir_timer:
-                    tm=threading.Timer(j, self.load_local_dir, [study, False])
-                    self.load_local_dir_timer[study]=tm
-                    tm.start()
+            # if found_study_name_index>-1 and load_all:
+            #     j+=1
+            #     if (study not in self.study_list or not self.study_list[study]) and study not in self.load_local_dir_timer:
+            #         tm=threading.Timer(j, self.load_local_dir, [study, False])
+            #         self.load_local_dir_timer[study]=tm
+            #         tm.start()
 
 
 
@@ -1465,7 +1488,7 @@ class ImageViewerApp(QApplication):
         # w = self.viewers[viewer]
         study_name = self.study_list.keys()[study]
         print 'Study: %s' % (study_name,)
-        if study_name not in self.study_list:
+        if study_name not in self.study_list or not self.study_list[study_name]:
             self.load_local_dir(study_name, load_all=False)
         try:
             self.load_more_images_th_ev.set()
@@ -1707,7 +1730,7 @@ def getMyDocPath():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
     base_dir=r'D:\ming_CT_new'
-    init_at=r'13614193285030025'
+    init_at=r'13614193285030155'
     app = ImageViewerApp(sys.argv, base_dir, init_at)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
