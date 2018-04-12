@@ -667,11 +667,21 @@ class ImageViewerApp(QApplication):
         super(ImageViewerApp, self).__init__(list)
 
         if totalViewer is None:
-            try:
-                self.total_viewer_count = int(list[1] if os.path.abspath(list[0])==os.path.abspath(__file__) else list[0])
-            except:
-                self.total_viewer_count = 4
+            # try:
+            #     self.total_viewer_count = int(list[0])
+            # except:
+            #     self.total_viewer_count = 4
+            self.total_viewer_count=4
+            print list
+            for v in list:
+                try:
+                    self.total_viewer_count=int(v)
+                    break
+                except:
+                    pass
 
+        else:
+            self.total_viewer_count=totalViewer
         self.screen_count = QDesktopWidget().screenCount()
         self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
         self.folder_path = folderPath
@@ -882,6 +892,7 @@ class ImageViewerApp(QApplication):
         # w.activateWindow()
 
         c.emit(SIGNAL('hide_disable'))
+
         # c.hide()
         # c.setEnabled(False)
 
@@ -899,6 +910,7 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.release()
         self.AccNo = AccNo
 
+        # self.load_old_hx()
         if not self.fast_mode:
             try:
                 self.old_hx_threads_ev.set()
