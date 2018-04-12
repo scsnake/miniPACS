@@ -663,15 +663,21 @@ class ImageViewer(QMainWindow):
 class ImageViewerApp(QApplication):
     dwData = 17
 
-    def __init__(self, list, folderPath, totalViewer=4):
+    def __init__(self, list, folderPath, totalViewer=None):
         super(ImageViewerApp, self).__init__(list)
+
+        if totalViewer is None:
+            try:
+                self.total_viewer_count = int(list[1] if os.path.abspath(list[0])==os.path.abspath(__file__) else list[0])
+            except:
+                self.total_viewer_count = 4
+
         self.screen_count = QDesktopWidget().screenCount()
         self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
         self.folder_path = folderPath
         self.viewers = []
         self.viewer_index = -1
         self.study_index = -1
-        self.total_viewer_count = totalViewer
         self.study_list = {}
         self.preload_timers = []
         # self.study_list_lock = threading.Lock()
@@ -693,7 +699,7 @@ class ImageViewerApp(QApplication):
         else:
             self.preload_count = 0
 
-        for _ in range(totalViewer):
+        for _ in range(self.total_viewer_count):
             self.viewers.append(ImageViewer(app=self))
 
         self.progressWin = ProgressWin(app=self)
