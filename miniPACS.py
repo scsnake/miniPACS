@@ -291,7 +291,7 @@ class ImageViewer(QMainWindow):
             imageLabel.setFixedSize(m.width, m.height)
             imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             # imageLabel.setScaledContents(True)
-            imageLabel.setGeometry(w_w, m.y, m.width, m.height)
+            imageLabel.setGeometry(w_w, 0, m.width, m.height)
             imageLabel.setAlignment(Qt.AlignCenter)
             imageLabel.fixedWidth = m.width
             imageLabel.fixedHeight = m.height
@@ -694,7 +694,7 @@ class ImageViewerApp(QApplication):
             #     self.total_viewer_count = int(list[0])
             # except:
             #     self.total_viewer_count = 4
-            self.total_viewer_count=3
+            self.total_viewer_count=4
             # print list
             for v in args:
                 try:
@@ -753,7 +753,10 @@ class ImageViewerApp(QApplication):
         # self.next_study()
 
     def reset(self):
-        map(lambda t:t.reset(), self.viewers)
+        map(lambda t:t.close(), self.viewers)
+        self.viewers=[]
+        for _ in range(self.total_viewer_count):
+            self.viewers.append(ImageViewer(app=self))
         self.viewer_index = -1
         self.study_index = -1
         self.study_list = {}
@@ -825,6 +828,7 @@ class ImageViewerApp(QApplication):
                 self.progressWin.next_study()
             elif 'fast_mode' in json_data:
                 self.fast_mode = bool(json_data['fast_mode'])
+                self.fast_mode_change()
             elif 'start_from' in json_data:
                 self.emit(SIGNAL('next_study'), json_data['start_from'])
             elif 'reset_all' in json_data:
@@ -834,6 +838,36 @@ class ImageViewerApp(QApplication):
         except Exception as e:
             print e
             return
+
+    def fast_mode_change(self):
+        self.use_monitor = (1, )
+        self.monitors=sorted(get_monitors(), key=lambda m: m.x)[self.use_monitor[0]:]
+        self.monitors_total = len(self.monitors)
+
+        if self.fast_mode:
+            expected_viewers_total = self.monitors_total*2
+            if expected_viewers_total>self.total_viewer_count:
+                for _ in range(expected_viewers_total-self.total_viewer_count):
+                    self.viewers.append(ImageViewer(app=self))
+                self.total_viewer_count = expected_viewers_total
+
+            self.non_fast_mode_win_pos = []
+
+            for i, v in enumerate(self.viewers):
+                self.non_fast_mode_win_pos.append(v.geometry())
+
+                m = self.monitors[i % self.monitors_total]
+                v.setFixedSize(m.width, m.height)
+                v.move(m.x, m.y)
+
+            self.monitors_ind = 0
+        else:
+            stored_win_pos_count = len(self.non_fast_mode_win_pos)
+            for i, v in enumerate(self.viewers):
+                if i < stored_win_pos_count:
+                    v.SetGeometry(self.non_fast_mode_win_pos[i])
+                else:
+                    v.SetGeometry(self.non_fast_mode_win_pos[stored_win_pos_count-1])
 
     def next_study(self, from_ind=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -865,19 +899,35 @@ class ImageViewerApp(QApplication):
         self.show_study(viewer=thisViewerInd, study=thisStudyInd, from_next=True)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
-        try:
-            map(lambda t: t.cancel(), self.preload_timers)
-        except:
-            pass
-        finally:
-            self.preload_timers = []
-            for i in range(self.preload_count):
-                if i==0:
-                    self.preload()
-                else:
-                    th = threading.Timer(i/2.0, partial(self.preload, i + 1))
+        if self.fast_mode:
+            try:
+                for t in self.preload_timers:
+                    if t!=0:
+                        t.cancel()
+            except:
+                pass
+            finally:
+                self.preload_timers = []
+                for i in range(self.monitors_total):
+                    th = threading.Timer((i+1)/2.0, partial(self.preload, i + 1))
                     th.start()
                     self.preload_timers.append(th)
+
+            self.viewers[(self.viewer_index + 1) % self.total_viewer_count].emit(SIGNAL('show_enable'))
+        else:
+            try:
+                map(lambda t: t.cancel(), self.preload_timers)
+            except:
+                pass
+            finally:
+                self.preload_timers = []
+                for i in range(self.preload_count):
+                    if i==0:
+                        self.preload()
+                    else:
+                        th = threading.Timer(i/2.0, partial(self.preload, i + 1))
+                        th.start()
+                        self.preload_timers.append(th)
 
     def prior_study(self):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -904,7 +954,8 @@ class ImageViewerApp(QApplication):
 
         if msg.exec_() == QMessageBox.Ok:
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
-            sys.exit(0)
+            self.quit()
+            # sys.exit(0)
 
     def show_study(self, viewer, study, from_next=''):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -916,7 +967,15 @@ class ImageViewerApp(QApplication):
         s = self.study_list[study]
         AccNo = s['AccNo']
 
-        Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'showStudy': 1, 'index': study, 'AccNo': AccNo}), ImageViewerApp.dwData)
+        if self.fast_mode:
+            g = w.geometry()
+            Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'showStudy': 1, 'index': study, 'AccNo': AccNo,
+                                                           'x': g.x(),
+                                                           'y': g.y(),
+                                                           'w': g.width(),
+                                                           'h': g.height()}), ImageViewerApp.dwData)
+        else:
+            Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'showStudy': 1, 'index': study, 'AccNo': AccNo}), ImageViewerApp.dwData)
 
         c = self.viewers[self.viewer_index]
 
@@ -1034,6 +1093,9 @@ class ImageViewerApp(QApplication):
             viewer.emit(SIGNAL('load'), study)
             viewer.preloading_AccNo = study['AccNo']
             viewer.old_hx = ''
+
+            if self.fast_mode and inc==1:
+                viewer.emit(SIGNAL('show_enable'))
 
             # SetWindowPos.insertAfter(viewer.winId(), hwndInsertAfter)
 
