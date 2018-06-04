@@ -1,5 +1,10 @@
-import win32con, win32api, win32gui, ctypes, ctypes.wintypes
 import threading
+
+import ctypes
+import ctypes.wintypes
+import win32api
+import win32con
+import win32gui
 
 
 class COPYDATASTRUCT(ctypes.Structure):
@@ -51,7 +56,7 @@ class WM_COPYDATA_Listener:
 
     def OnCopyData(self, *args, **kwargs):
         for k in ['hwnd', 'msg', 'wparam', 'lparam', 'dwData', 'cbData', 'lpData']:
-            print kwargs[k]
+            print(kwargs[k])
 
     def __OnCopyData(self, hwnd, msg, wparam, lparam):
         pCDS = ctypes.cast(lparam, PCOPYDATASTRUCT)
