@@ -1,5 +1,10 @@
-import win32con, win32api, win32gui, ctypes, ctypes.wintypes
 import threading
+
+import ctypes
+import ctypes.wintypes
+import win32api
+import win32con
+import win32gui
 
 
 class COPYDATASTRUCT(ctypes.Structure):
