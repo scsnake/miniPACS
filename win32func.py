@@ -28,7 +28,7 @@ def Send_WM_COPYDATA(hwnd, str, dwData=0):
 
 
 class WM_COPYDATA_Listener:
-    def __init__(self, receiver=None):
+    def __init__(self, receiver=None, title ="WM_COPYDATA_Listener"):
         message_map = {
             win32con.WM_COPYDATA: self.__OnCopyData
         }
@@ -39,7 +39,7 @@ class WM_COPYDATA_Listener:
         classAtom = win32gui.RegisterClass(wc)
         self.hwnd = win32gui.CreateWindow(
             classAtom,
-            "WM_COPYDATA_Listener",
+            title,
             0,
             0,
             0,
