@@ -27,6 +27,24 @@ from screeninfo import get_monitors
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
 
+def _async_raise(tid, exctype):
+    """raises the exception, performs cleanup if needed"""
+    if not inspect.isclass(exctype):
+        exctype = type(exctype)
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(tid), ctypes.py_object(exctype))
+    if res == 0:
+        raise ValueError("invalid thread id")
+    elif res != 1:
+        # """if it returns a number greater than one, you're in trouble,
+        # and you should call it again with exc=NULL to revert the effect"""
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
+        raise SystemError("PyThreadState_SetAsyncExc failed")
+
+
+def stop_thread(thread):
+    with suppress(Exception):
+        _async_raise(thread.ident, SystemExit)
+
 def _get_monitors():
     global app
     d = app.desktop()
@@ -404,10 +422,11 @@ class ImageViewer(QMainWindow):
             l.clear()
 
     def show_enable(self):
-        # self.setEnabled(True)
+        self.setEnabled(True)
         # self.setWindowFlags(Qt.Tool | Qt.Widget | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowStaysOnTopHint)
         self.show()
         self.activateWindow()
+        map(lambda l: l.setEnabled(True), self.image_labels)
 
     def hide_disable(self):
         self.hide()
@@ -496,13 +515,10 @@ class ImageViewer(QMainWindow):
             image_count_sum += sum(image_count.values())
         self.total_image_count = image_count_sum
 
-        try:
-            list(map(lambda th: th.terminate(), self.load_image_th))
-            self.load_lock.release()
-        except:
-            pass
-        finally:
-            self.load_image_th = []
+        # with suppress(Exception):
+        #     self.load_lock.release()
+        map(lambda th: stop_thread(th), self.load_image_th)
+        self.load_image_th = []
 
         # self.load_dir()
         for i, d in enumerate(self.expected_image_count):
@@ -520,6 +536,9 @@ class ImageViewer(QMainWindow):
         self.AccNo = AccNo
         self.info_label.setText(self.AccNo + '\n' + self.ChartNo)
 
+    # def loading_image(self, AccNo, image_path):
+    #     self.loaded_image[AccNo][image_path] = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
     def load_image(self, AccNo, expected_count):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         AccNo, index = self.whichLabel(AccNo=AccNo)
@@ -527,15 +546,16 @@ class ImageViewer(QMainWindow):
         ind = 0
         while True:
 
-            self.load_lock.acquire()
+            # self.load_lock.acquire()
             for k, image_path in enumerate(glob.glob(os.path.join(self.folder, AccNo + ' *.jpeg'))):
                 if image_path not in self.loaded_image[AccNo]:
                     # self.loaded_image[AccNo][image_path] = QImage(image_path)
                     self.loaded_image[AccNo][image_path] = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                    # threading.Thread(target=self.loading_image, args=(AccNo, image_path)).start()
                     last_k = k
                     break
             is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[index][AccNo]
-            self.load_lock.release()
+            # self.load_lock.release()
             if ind > 300:
                 logging.error('load image timeout: %s expected %d images, only %d images' %
                               (AccNo, self.expected_image_count[index][AccNo], len(self.loaded_image[AccNo])))
@@ -550,9 +570,9 @@ class ImageViewer(QMainWindow):
 
     def load_single_image(self, AccNo, image_path):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        self.load_lock.acquire()
+        # self.load_lock.acquire()
         self.loaded_image[AccNo][image_path] = image = QImage(image_path)
-        self.load_lock.release()
+        # self.load_lock.release()
         return image
 
     def load_old_hx(self, old_hx):
@@ -1023,11 +1043,14 @@ class ImageViewerApp(QApplication):
         msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
 
         if msg.exec_() == QMessageBox.Ok:
-            Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
-            self.quit()
+            # Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
+            # stop_thread(self.WM_COPYDATA_Listener.thread)
+            self.WM_COPYDATA_Listener.quit()
+            self.exit(0)
             # sys.exit(0)
+            # self.quit()
 
-    def show_study(self, viewer, study, from_next=''):
+    def show_study(self, viewer, study, from_next=False):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         viewer = int(viewer)
@@ -1230,3 +1253,4 @@ if __name__ == '__main__':
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
     sys.exit(app.exec_())
+
