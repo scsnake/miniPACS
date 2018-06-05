@@ -768,7 +768,7 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('activate_main'), self.activate_main)
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
-        self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
+        self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener, title='WM_COPYDATA_Listener_miniPACS')
 
 
         # self.next_study()
