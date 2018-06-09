@@ -712,8 +712,8 @@ class ImageViewer(QMainWindow):
         image_label.setEnabled(True)
         image_label.show()
         # image_label.activateWindow()
-
-        threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
+        if not (self.app.fast_mode or self.app.turbo_mode):
+            threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
         # self.setWindowTitle(image_path)
         self.show_lock.release()
         image_label.curtain_label.hide()
@@ -913,15 +913,15 @@ class ImageViewerApp(QApplication):
                 self.total_viewer_count = expected_viewers_total
 
             self.non_fast_mode_win_pos = []
-            m = self.monitors[self.use_monitor[0]]
+            m = self.monitors[0]
             w, h = int(m.width / 2.0), int(m.height / 2.0)
-            x, y = np.full((1, 4), m.x), np.full((1, 4), m.y)
+            x, y = np.full((4, ), m.x), np.full((4, ), m.y)
             x += np.array([0, w, w, 0])
             y += np.array([0, 0, h, h])
             for i, v in enumerate(self.viewers):
                 self.non_fast_mode_win_pos.append(v.geometry())
                 v.setFixedSize(w, h)
-                v.move(x[0, i], y[0, i])
+                v.move(x[i], y[i])
                 v.image_labels[0].setFixedSize(w, h)
 
             # if self.first_launch:
@@ -1253,4 +1253,3 @@ if __name__ == '__main__':
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
     sys.exit(app.exec_())
-
