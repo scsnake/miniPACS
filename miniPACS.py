@@ -664,6 +664,10 @@ class ImageViewer(QMainWindow):
         image_label = self.image_labels[index]
         image_label.count_label.setText('%d / %d' % (image_ind + 1,
                                                      self.expected_image_count[index][AccNo]))
+
+        # if AccNo=='T0100685858':
+        #     a=1
+
         try:
             image_label.count_label.hide_label_tm.cancel()
         except:
@@ -688,6 +692,24 @@ class ImageViewer(QMainWindow):
             else:
                 image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
                 # self.load_single_image(Acc, image_path, image)
+
+            self.image_labels[index].curtain_label.hide()
+            self.image_labels[index].count_label.show()
+            self.info_label.show()
+
+            # TODO: keep preprocessed data according to image_ind, not image_label
+            w = image_label.width()
+            h = image_label.height()
+            px = QPixmap.fromImage(
+                QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8)
+                    .scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+            scaled = px
+            image_label.emit(SIGNAL('set_pixmap'), scaled)
+            # image_label.setPixmap(scaled)
+            image_label.setEnabled(True)
+            image_label.show()
+            # image_label.activateWindow()
         except:
             image_label.clear()
             # self.show_curtain(index=index)
@@ -695,23 +717,7 @@ class ImageViewer(QMainWindow):
             threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
             return
 
-        self.image_labels[index].curtain_label.hide()
-        self.image_labels[index].count_label.show()
-        self.info_label.show()
 
-        # TODO: keep preprocessed data according to image_ind, not image_label
-        w = image_label.width()
-        h = image_label.height()
-        px = QPixmap.fromImage(
-            QImage(image.data, image.shape[1], image.shape[0], image.shape[1], QImage.Format_Indexed8)
-                .scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-
-        scaled = px
-        image_label.emit(SIGNAL('set_pixmap'), scaled)
-        # image_label.setPixmap(scaled)
-        image_label.setEnabled(True)
-        image_label.show()
-        # image_label.activateWindow()
         if not (self.app.fast_mode or self.app.turbo_mode):
             threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
         # self.setWindowTitle(image_path)
@@ -830,6 +836,11 @@ class ImageViewerApp(QApplication):
     def load(self, jsonStr):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         return self.listener(dwData=ImageViewerApp.dwData, lpData=jsonStr)
+
+    def request_study_list(self, ind):
+        Send_WM_COPYDATA(self.bridge_hwnd,
+                         json.dumps({'request': ind}),
+                         ImageViewerApp.dwData)
 
     def listener(self, *args, **kwargs):
         # logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -1186,7 +1197,8 @@ class ImageViewerApp(QApplication):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         # self.load_thread_lock.acquire()
-
+        # if inc==2:
+        #     a=1
         preload_ind = (self.viewer_index + inc) % self.total_viewer_count
         preload_prior_ind = (self.viewer_index + inc - 1) % self.total_viewer_count
         study_ind = self.study_index + inc
@@ -1196,7 +1208,13 @@ class ImageViewerApp(QApplication):
         if not study_ind < self.total_study_count:
             return
 
+        ind=-1
         while not study_ind in self.study_list:
+            print(study_ind)
+            print(self.study_list)
+            ind+=1
+            if ind % 10 ==0:
+                self.request_study_list(study_ind)
             sleep(0.5)
 
         study = self.study_list[study_ind]
