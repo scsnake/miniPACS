@@ -45,6 +45,7 @@ def stop_thread(thread):
     with suppress(Exception):
         _async_raise(thread.ident, SystemExit)
 
+
 def _get_monitors():
     global app
     d = app.desktop()
@@ -717,7 +718,6 @@ class ImageViewer(QMainWindow):
             threading.Timer(1, lambda args: self.emit(SIGNAL('show_image'), *args), [[image_ind, AccNo, index]]).start()
             return
 
-
         if not (self.app.fast_mode or self.app.turbo_mode):
             threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
         # self.setWindowTitle(image_path)
@@ -926,7 +926,7 @@ class ImageViewerApp(QApplication):
             self.non_fast_mode_win_pos = []
             m = self.monitors[0]
             w, h = int(m.width / 2.0), int(m.height / 2.0)
-            x, y = np.full((4, ), m.x), np.full((4, ), m.y)
+            x, y = np.full((4,), m.x), np.full((4,), m.y)
             x += np.array([0, w, w, 0])
             y += np.array([0, 0, h, h])
             for i, v in enumerate(self.viewers):
@@ -935,10 +935,10 @@ class ImageViewerApp(QApplication):
                 v.move(x[i], y[i])
                 v.image_labels[0].setFixedSize(w, h)
 
-            # if self.first_launch:
-            #     for i in range(3, 0, -1):
-            #         self.viewers[i].emit(SIGNAL('show_enable'))
-            #         self.preload(i+1)
+                # if self.first_launch:
+                #     for i in range(3, 0, -1):
+                #         self.viewers[i].emit(SIGNAL('show_enable'))
+                #         self.preload(i+1)
 
         elif self.fast_mode:
             expected_viewers_total = self.monitors_total * 2
@@ -1007,7 +1007,7 @@ class ImageViewerApp(QApplication):
             else:
                 self.preload(3)
                 self.viewers[(self.viewer_index + 3) % self.total_viewer_count].emit(SIGNAL('show_enable'))
-            # pass
+                # pass
         else:
 
             try:
@@ -1208,12 +1208,12 @@ class ImageViewerApp(QApplication):
         if not study_ind < self.total_study_count:
             return
 
-        ind=-1
+        ind = -1
         while not study_ind in self.study_list:
-            print(study_ind)
-            print(self.study_list)
-            ind+=1
-            if ind % 10 ==0:
+            # print(study_ind)
+            # print(self.study_list)
+            ind += 1
+            if ind % 10 == 0:
                 self.request_study_list(study_ind)
             sleep(0.5)
 
