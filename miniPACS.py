@@ -89,11 +89,12 @@ class ImageLabel(QLabel):
                 self.cal_th_ev.set()
                 self.cal_th.join()
                 self.original_image_processing_tm.cancel()
+                self.emit(SIGNAL('set_pixmap'), self.base_px)
             except:
                 pass
             finally:
                 # self.setPixmap(self.original_px)
-                self.emit(SIGNAL('set_pixmap'), self.base_px)
+
                 self.mousePressed = False
 
     def mouseMoveEvent(self, QMouseEvent):
@@ -518,7 +519,7 @@ class ImageViewer(QMainWindow):
 
         # with suppress(Exception):
         #     self.load_lock.release()
-        map(lambda th: stop_thread(th), self.load_image_th)
+        map(lambda th: th.cancel(), self.load_image_th)
         self.load_image_th = []
 
         # self.load_dir()
@@ -540,11 +541,11 @@ class ImageViewer(QMainWindow):
     # def loading_image(self, AccNo, image_path):
     #     self.loaded_image[AccNo][image_path] = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    def load_image(self, AccNo, expected_count):
+    def load_image(self, AccNo, expected_count, ind=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
         AccNo, index = self.whichLabel(AccNo=AccNo)
-        last_k = 0
-        ind = 0
+        # last_k = 0
+        # ind = 0
         while True:
 
             # self.load_lock.acquire()
@@ -553,17 +554,21 @@ class ImageViewer(QMainWindow):
                     # self.loaded_image[AccNo][image_path] = QImage(image_path)
                     self.loaded_image[AccNo][image_path] = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
                     # threading.Thread(target=self.loading_image, args=(AccNo, image_path)).start()
-                    last_k = k
+                    # last_k = k
                     break
             is_done = len(self.loaded_image[AccNo]) < self.expected_image_count[index][AccNo]
             # self.load_lock.release()
-            if ind > 300:
+            if ind > 50:
                 logging.error('load image timeout: %s expected %d images, only %d images' %
                               (AccNo, self.expected_image_count[index][AccNo], len(self.loaded_image[AccNo])))
                 break
             elif is_done:
-                sleep(0.5 if last_k == 0 else 0.1)
-                ind += 1
+                # sleep(0.5 if last_k == 0 else 0.1)
+                # ind += 1
+                tm = threading.Timer(0.1, self.load_image, [AccNo, expected_count, ind + 1])
+                self.load_image_th.append(tm)
+                tm.start()
+                return
             else:
                 break
 
@@ -577,8 +582,8 @@ class ImageViewer(QMainWindow):
         return image
 
     def load_old_hx(self, old_hx):
-        print(self.AccNo)
-        print(old_hx)
+        # print(self.AccNo)
+        # print(old_hx)
 
         self.old_hx_label.clear()
         self.old_hx_label.hide()
@@ -615,7 +620,7 @@ class ImageViewer(QMainWindow):
 
     def next_image(self, AccNo='', index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        self.show_lock.acquire()
+        # self.show_lock.acquire()
         AccNo, index = self.whichLabel(AccNo, index)
         expected_image_count = self.expected_image_count[index][AccNo]
         ind = self.ind[AccNo]
@@ -632,7 +637,7 @@ class ImageViewer(QMainWindow):
 
     def prior_image(self, AccNo='', index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        self.show_lock.acquire()
+        # self.show_lock.acquire()
         AccNo, index = self.whichLabel(AccNo, index)
         expected_image_count = self.expected_image_count[index][AccNo]
         ind = self.ind[AccNo]
@@ -660,7 +665,10 @@ class ImageViewer(QMainWindow):
 
     def show_image(self, image_ind, AccNo='', index=0):
         logging.debug(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
-        AccNo, index = self.whichLabel(AccNo, index)
+        try:
+            AccNo, index = self.whichLabel(AccNo, index)
+        except:
+            pass
 
         image_label = self.image_labels[index]
         image_label.count_label.setText('%d / %d' % (image_ind + 1,
@@ -721,7 +729,7 @@ class ImageViewer(QMainWindow):
         if not (self.app.fast_mode or self.app.turbo_mode):
             threading.Thread(target=self.preprocessing, args=(image_label, image, scaled)).start()
         # self.setWindowTitle(image_path)
-        self.show_lock.release()
+        # self.show_lock.release()
         image_label.curtain_label.hide()
         Send_WM_COPYDATA(self.app.bridge_hwnd, json.dumps({'activateSimpleRIS_2': 1}), self.app.dwData)
 
@@ -965,7 +973,7 @@ class ImageViewerApp(QApplication):
                 else:
                     v.setGeometry(self.non_fast_mode_win_pos[stored_win_pos_count - 1])
 
-    def next_study(self, from_ind=None):
+    def next_study(self, from_ind=None, retry=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         # if not from_ind in self.study_list:
@@ -987,11 +995,16 @@ class ImageViewerApp(QApplication):
             self.show_study_lock.release()
             self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
             self.emit(SIGNAL('show_dialog'))
+            self.show_study_lock.release()
             return
         if not thisStudyInd in self.study_list:
+            if retry and retry < 10:
+                self.show_study_lock.release()
+                self.next_study_th = threading.Timer(0.5, self.next_study, [from_ind, retry + 1 if retry else 1])
+                self.next_study_th.start()
+            else:
+                print('No information for study #' + str(thisStudyInd + 1) + '!!')
             self.show_study_lock.release()
-            self.next_study_th = threading.Timer(0.5, self.next_study, [from_ind])
-            self.next_study_th.start()
             return
 
         thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
@@ -1193,7 +1206,7 @@ class ImageViewerApp(QApplication):
     def prior_index(self, ind, total):
         return (ind - 1 + total) % total
 
-    def preload(self, inc=1):
+    def preload(self, inc=1, retry=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         # self.load_thread_lock.acquire()
@@ -1208,14 +1221,20 @@ class ImageViewerApp(QApplication):
         if not study_ind < self.total_study_count:
             return
 
-        ind = -1
-        while not study_ind in self.study_list:
-            # print(study_ind)
-            # print(self.study_list)
-            ind += 1
-            if ind % 10 == 0:
-                self.request_study_list(study_ind)
-            sleep(0.5)
+        if study_ind not in self.study_list:
+            threading.Thread(target=self.request_study_list, args=(study_ind,)).start()
+            # ind = retry if retry else -1
+            # ind += 1
+            #
+            # if ind > 30:
+            #     return
+            #
+            # if ind > 0 and ind % 10 == 0:
+            #     threading.Thread(target=self.request_study_list, args=(study_ind,)).start()
+            # tm = threading.Timer(0.5, self.preload, [inc, ind])
+            # self.preload_timers.append(tm)
+            # tm.start()
+            return
 
         study = self.study_list[study_ind]
         viewer = self.viewers[preload_ind]
