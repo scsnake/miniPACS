@@ -164,11 +164,13 @@ class ImageLabel(QLabel):
 
     def cal_brightness_contrast(self, mouseX, mouseY, use_downsampled=True):
         # cl = clock()
-
-        if not use_downsampled:
-            using_image = self.base_image
-        else:
-            using_image = self.downsampled_sharpen_image if self.is_sharp_image else self.downsampled_image
+        try:
+            if not use_downsampled:
+                using_image = self.base_image
+            else:
+                using_image = self.downsampled_sharpen_image if self.is_sharp_image else self.downsampled_image
+        except:
+            return
 
         contrast = self.sigmoid(np.float16(mouseX - self.mousePressedPosX) / self.fixedWidth)
         brightness = self.sigmoid(np.float16(mouseY - self.mousePressedPosY) / self.fixedHeight)
@@ -391,6 +393,7 @@ class ImageViewer(QMainWindow):
         self.connect(self, SIGNAL('hide_old_hx'), self.hide_old_hx)
         self.connect(self, SIGNAL('clear_labels'), self.clear_labels)
         self.connect(self, SIGNAL('border_color_toggle'), self.border_color_toggle)
+        self.connect(self, SIGNAL('reset'), self.reset)
 
         # self._define_global_shortcuts()
 
@@ -821,10 +824,12 @@ class ImageViewerApp(QApplication):
         # self.next_study()
 
     def reset(self):
-        list(map(lambda t: t.close(), self.viewers))
-        self.viewers = []
-        for _ in range(self.total_viewer_count):
-            self.viewers.append(ImageViewer(app=self))
+        with suppress(Exception):
+            map(lambda t: t.cancel, self.preload_timers)
+        map(lambda t: t.emit(SIGNAL('reset')), self.viewers)
+        # self.viewers = []
+        # for _ in range(self.total_viewer_count):
+        #     self.viewers.append(ImageViewer(app=self))
         self.viewer_index = -1
         self.study_index = -1
         self.show_index = -1
@@ -833,6 +838,10 @@ class ImageViewerApp(QApplication):
         self.turbo_mode = False
         self.total_study_count = 0
         self.preload_timers = []
+        with suppress(Exception):
+            self.show_study_lock.release()
+        with suppress(Exception):
+            self.load_thread_lock.release()
         self.show_study_lock = threading.Lock()
         self.load_thread_lock = threading.Lock()
         self.bridge_hwnd = 0
@@ -992,19 +1001,20 @@ class ImageViewerApp(QApplication):
             thisStudyInd = self.study_index + 1
 
         if not thisStudyInd < self.total_study_count:
-            self.show_study_lock.release()
+            with suppress(Exception):
+                self.show_study_lock.release()
             self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
             self.emit(SIGNAL('show_dialog'))
-            self.show_study_lock.release()
             return
         if not thisStudyInd in self.study_list:
-            if retry and retry < 10:
+            if retry is None or retry < 10:
                 self.show_study_lock.release()
                 self.next_study_th = threading.Timer(0.5, self.next_study, [from_ind, retry + 1 if retry else 1])
                 self.next_study_th.start()
             else:
                 print('No information for study #' + str(thisStudyInd + 1) + '!!')
-            self.show_study_lock.release()
+            with suppress(Exception):
+                self.show_study_lock.release()
             return
 
         thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
@@ -1049,7 +1059,8 @@ class ImageViewerApp(QApplication):
         thisStudyInd = self.study_index - 1
         if thisStudyInd < 0:
             print('Beyond first study!')
-            self.show_study_lock.release()
+            with suppress(Exception):
+                self.show_study_lock.release()
             return
         thisViewerInd = self.prior_index(self.viewer_index, self.total_viewer_count)
 
@@ -1067,9 +1078,9 @@ class ImageViewerApp(QApplication):
         msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
 
         if msg.exec_() == QMessageBox.Ok:
-            # Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
+            Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
             # stop_thread(self.WM_COPYDATA_Listener.thread)
-            self.WM_COPYDATA_Listener.quit()
+            # self.WM_COPYDATA_Listener.quit()
             self.exit(0)
             # sys.exit(0)
             # self.quit()
@@ -1142,7 +1153,8 @@ class ImageViewerApp(QApplication):
         if from_next:
             self.progressWin.pTick = clock()
             self.progressWin.emit(SIGNAL('show'))
-        self.show_study_lock.release()
+        with suppress(Exception):
+            self.show_study_lock.release()
         self.AccNo = AccNo
 
         # self.load_old_hx()
@@ -1198,7 +1210,8 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.acquire()
         c = self.viewers[self.viewer_index]
         c.emit(SIGNAL('hide_disable'))
-        self.show_study_lock.release()
+        with suppress(Exception):
+            self.show_study_lock.release()
 
     def next_index(self, ind, total):
         return (ind + 1) % total
@@ -1222,7 +1235,13 @@ class ImageViewerApp(QApplication):
             return
 
         if study_ind not in self.study_list:
-            threading.Thread(target=self.request_study_list, args=(study_ind,)).start()
+            if not self.turbo_mode:
+                if retry is None or retry<3:
+                    tm=threading.Timer(0.5, self.preload, [inc, retry+1 if retry else 1])
+                    self.preload_timers.append(tm)
+                    tm.start()
+                else:
+                    threading.Thread(target=self.request_study_list, args=(study_ind,)).start()
             # ind = retry if retry else -1
             # ind += 1
             #
@@ -1289,4 +1308,4 @@ if __name__ == '__main__':
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
-    sys.exit(app.exec_())
+    sys.exit(app.exec_()
