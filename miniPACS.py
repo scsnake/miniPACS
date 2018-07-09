@@ -243,13 +243,17 @@ class ProgressWin(QWidget):
         self.connect(self, SIGNAL('update_text'), self.update_text)
         self.connect(self, SIGNAL('show'), self.show_self)
 
-    def next_study(self):
+    def next_study(self, jumps=1):
         cl = clock()
         t = (cl - self.pTick) * 1.0
-        self.read_time.append(t)
-        self.read_count += 1
 
-        if self.read_count == 1:
+        self.read_time.append(t)
+        if jumps > 1:
+            for _ in range(jumps - 1):
+                self.read_time.append(0.5)
+        self.read_count += jumps
+
+        if self.read_count == 1 and jumps == 1:
             self.read_time_mean = t
             self.read_time_sd = 0
         else:
@@ -283,6 +287,9 @@ class ProgressWin(QWidget):
 
     def show_self(self):
         self.show()
+
+    def jump(self, jumps):
+        pass
 
 
 class ImageViewer(QMainWindow):
@@ -879,6 +886,8 @@ class ImageViewerApp(QApplication):
                 case = int(json_data['next_study'])
                 if case == 1:
                     self.next_study()
+                elif case > 1:
+                    self.next_study(case, jump=True)
                 else:
                     self.prior_study()
                     # self.emit(SIGNAL('next_study'))
@@ -910,7 +919,7 @@ class ImageViewerApp(QApplication):
                 if json_data['from'] == 'open_impax':
                     self.emit(SIGNAL('hide_all'))
             elif 'sendReportEnd' in json_data:
-                self.progressWin.next_study()
+                self.progressWin.next_study(json_data['sendReportEnd'])
             elif 'fast_mode' in json_data:
                 self.fast_mode = bool(json_data['fast_mode'])
                 self.fast_mode_change()
@@ -982,7 +991,7 @@ class ImageViewerApp(QApplication):
                 else:
                     v.setGeometry(self.non_fast_mode_win_pos[stored_win_pos_count - 1])
 
-    def next_study(self, from_ind=None, retry=None):
+    def next_study(self, from_ind=None, retry=None, jump=False):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         # if not from_ind in self.study_list:
@@ -996,7 +1005,10 @@ class ImageViewerApp(QApplication):
         if from_ind is not None:
             from_ind = int(from_ind)
             # self.study_index = from_ind - 1
-            thisStudyInd = from_ind
+            if jump:
+                thisStudyInd = self.study_index + from_ind
+            else:
+                thisStudyInd = from_ind
         else:
             thisStudyInd = self.study_index + 1
 
@@ -1017,15 +1029,16 @@ class ImageViewerApp(QApplication):
                 self.show_study_lock.release()
             return
 
-        thisViewerInd = self.next_index(self.viewer_index, self.total_viewer_count)
+        thisViewerInd = self.next_index(self.viewer_index + (from_ind - 1 if jump else 0), self.total_viewer_count)
 
-        self.show_study(viewer=thisViewerInd, study=thisStudyInd, from_next=True)
+        self.show_study(viewer=thisViewerInd, study=thisStudyInd, from_next=True,
+                        jump=from_ind if jump else None)
         # self.emit(SIGNAL('show_study'), thisViewerInd, thisStudyInd)
 
         if self.turbo_mode:
-            if self.show_index <= 0:
+            if self.show_index <= 1 or jump:
                 for i in range(3):
-                    self.preload(i + 1)
+                    self.preload(i + 1, retry=1)
                     self.viewers[i + 1].emit(SIGNAL('show_enable'))
             else:
                 self.preload(3)
@@ -1085,7 +1098,7 @@ class ImageViewerApp(QApplication):
             # sys.exit(0)
             # self.quit()
 
-    def show_study(self, viewer, study, from_next=False):
+    def show_study(self, viewer, study, from_next=False, jump=None):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
 
         viewer = int(viewer)
@@ -1159,8 +1172,11 @@ class ImageViewerApp(QApplication):
 
         # self.load_old_hx()
         if self.turbo_mode:
-            w.emit(SIGNAL('border_color_toggle'), True)
-            c.emit(SIGNAL('border_color_toggle'), False)
+            for mw in self.viewers:
+                if mw == w:
+                    mw.emit(SIGNAL('border_color_toggle'), True)
+                else:
+                    mw.emit(SIGNAL('border_color_toggle'), False)
             #
             # if self.first_launch:
             #     for i in range(3, 0, -1):
@@ -1236,12 +1252,16 @@ class ImageViewerApp(QApplication):
 
         if study_ind not in self.study_list:
             if not self.turbo_mode:
-                if retry is None or retry<3:
-                    tm=threading.Timer(0.5, self.preload, [inc, retry+1 if retry else 1])
+                if retry is None or retry < 10:
+                    tm = threading.Timer(0.5, self.preload, [inc, retry + 1 if retry else 1])
                     self.preload_timers.append(tm)
                     tm.start()
                 else:
                     threading.Thread(target=self.request_study_list, args=(study_ind,)).start()
+            elif retry and retry < 10:
+                tm = threading.Timer(0.5, self.preload, [inc, retry + 1])
+                self.preload_timers.append(tm)
+                tm.start()
             # ind = retry if retry else -1
             # ind += 1
             #
@@ -1308,4 +1328,4 @@ if __name__ == '__main__':
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
-    sys.exit(app.exec_()
+    sys.exit(app.exec_())
