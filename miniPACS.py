@@ -5,7 +5,7 @@ import glob
 import inspect
 import json
 import logging
-import os
+import os, re
 import statistics as stat
 import sys
 import threading
@@ -13,7 +13,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from functools import partial
 from time import sleep, clock
-
+from pathlib import Path
 import cv2
 import numpy as np
 from PyQt4.QtCore import *
@@ -242,6 +242,17 @@ class ProgressWin(QWidget):
 
         self.connect(self, SIGNAL('update_text'), self.update_text)
         self.connect(self, SIGNAL('show'), self.show_self)
+        self.connect(self, SIGNAL('hide'), self.hide)
+        self.connect(self, SIGNAL('reset'), self.reset)
+    def reset(self):
+        self.total_count = 0
+        self.read_count = 0
+        self.read_time = []
+        self.read_time_sum = 0
+        self.read_time_mean = 0
+        self.estimated_time_remaining = 0
+        self.pTick = 0
+        self.emit(SIGNAL('hide'))
 
     def next_study(self, jumps=1):
         cl = clock()
@@ -275,7 +286,7 @@ class ProgressWin(QWidget):
         self.emit(SIGNAL('update_text'))
 
     def update_text(self):
-        s = ('%d / %d\n%.1f ± %.1f\nETR: %s' % (self.read_count + 1
+        s = ('%d / %d\n%.1f ¡Ó %.1f\nETR: %s' % (self.read_count + 1
                                                 , self.total_count
                                                 , self.read_time_mean
                                                 , self.read_time_sd
@@ -516,6 +527,24 @@ class ImageViewer(QMainWindow):
         ChartNo = study['ChartNo']
         AccNo = study['AccNo']
         folder_path = study['folder_path']
+
+        if not 'expected_image_count' in study:
+            
+            study['expected_image_count']=[]
+            dc = {}
+            for im in Path(folder_path).glob('*.jpeg'):
+                m=re.search(r'^([^\s]+)\s([^\s]+)\s(\d+)', im.name)
+                if m:
+                    if m.group(1) in dc:
+                        dc[m.group(1)]+=1
+                    else:
+                        dc[m.group(1)] =1
+            expected_image_count = dc[AccNo]
+            for k,v in dc.items():
+                d={}
+                d[k]=v
+                study['expected_image_count'].append(d)
+
         expected_image_count = study['expected_image_count']
 
         self.ChartNo = ChartNo
@@ -837,6 +866,7 @@ class ImageViewerApp(QApplication):
         # self.viewers = []
         # for _ in range(self.total_viewer_count):
         #     self.viewers.append(ImageViewer(app=self))
+        self.progressWin.emit(SIGNAL('reset'))
         self.viewer_index = -1
         self.study_index = -1
         self.show_index = -1
@@ -864,6 +894,11 @@ class ImageViewerApp(QApplication):
     def request_study_list(self, ind):
         Send_WM_COPYDATA(self.bridge_hwnd,
                          json.dumps({'request': ind}),
+                         ImageViewerApp.dwData)
+
+    def send_bridge(self, msg):
+        Send_WM_COPYDATA(self.bridge_hwnd,
+                         json.dumps(msg),
                          ImageViewerApp.dwData)
 
     def listener(self, *args, **kwargs):
@@ -1016,7 +1051,8 @@ class ImageViewerApp(QApplication):
             with suppress(Exception):
                 self.show_study_lock.release()
             self.viewers[self.viewer_index].emit(SIGNAL('hide_disable'))
-            self.emit(SIGNAL('show_dialog'))
+            # self.emit(SIGNAL('show_dialog'))
+            self.send_bridge({'reach_end': 1})
             return
         if not thisStudyInd in self.study_list:
             if retry is None or retry < 10:
@@ -1328,4 +1364,4 @@ if __name__ == '__main__':
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
-    sys.exit(app.exec_())
+    sys.exit(app.exec_()
