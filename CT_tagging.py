@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import Queue
+import queue as Queue
 import codecs
 import ctypes.wintypes
 import glob
@@ -10,14 +10,15 @@ import logging
 import os
 import sys
 import threading
+import re
 from collections import OrderedDict
 from functools import partial
 from time import sleep, clock
 
 import cv2
-import dicom
+import pydicom as dicom
 import numpy as np
-from PyQt4.QtCore import Qt, SIGNAL, QString, QPoint
+from PyQt4.QtCore import Qt, SIGNAL, QPoint
 from PyQt4.QtGui import QApplication, QMainWindow, QMessageBox, QLabel, QImage, QPainter, QPen, QBrush
 from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont, QToolTip
 from PyQt4.QtGui import QWidget, QCursor
@@ -58,8 +59,8 @@ class ViewPort(QLabel):
         self.connect(self, SIGNAL('sharp_image'), self.sharp_image)
         self.setFocus()
 
-    def apply_window(self, data):
-        wl, ww = self.window_setting
+    def apply_window(self, data, window=None):
+        wl, ww = self.window_setting if window is None else window
         data[data < wl - ww] = wl - ww
         data[data >= wl + ww] = wl + ww - 1
         return ((data - (wl - ww)) * 256.0 / (2 * ww)).astype(np.uint8)
@@ -104,7 +105,8 @@ class ViewPort(QLabel):
         if QMouseEvent.button() == Qt.LeftButton:
             point = self.mapToGlobal(QMouseEvent.pos())
 
-            if QApplication.keyboardModifiers() == Qt.ShiftModifier:
+            # if QApplication.keyboardModifiers() == Qt.ShiftModifier:
+            if True:
                 self.parent.emit(SIGNAL('getCoord'), point.x(), point.y(), self.number)
             else:
                 self.parent.emit(SIGNAL('getCoord'), point.x(), point.y(), self.number, True)
@@ -279,13 +281,13 @@ class ProgressWin(QWidget):
         self.emit(SIGNAL('update_text'))
 
     def update_text(self):
-        s = ('%d / %d\n%.1f ± %.1f\nETR: %s' % (self.read_count + 1
+        s = ('%d / %d\n%.1f ¡Ó %.1f\nETR: %s' % (self.read_count + 1
                                                 , self.total_count
                                                 , self.read_time_mean
                                                 , self.read_time_sd
                                                 , self.estimated_time_remaining))
-
-        self.progress_label.setText(QString.fromUtf8(s))
+        _fromUtf8 = lambda s: s
+        self.progress_label.setText(_fromUtf8)
         # print s.decode('utf-8')
 
     def show_self(self):
@@ -429,6 +431,8 @@ class MainViewer(QMainWindow):
         self.pen = QPen(Qt.red, 5)
         self.brush = QBrush(Qt.red)
         self.dicom_data = []
+        self.dicom_info_all = []
+        self.modality = ''
         self.showing = False
         self.painter = QPainter()
         # self._define_global_shortcuts()
@@ -492,6 +496,16 @@ class MainViewer(QMainWindow):
         # qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
         #     w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
         # )
+
+        # gray = self.cache[image_ind]['gray']
+        # im_h, im_w = gray.shape
+        #
+        # if im_w*1.0/im_h > w*1.0/h:
+        #     zoom_factor = w*1.0/im_w
+        # else:
+        #     zoom_factor = h * 1.0 / im_h
+        # gray = zoom(gray, zoom_factor)
+
         qi = self.cache[image_ind]['qimage'].scaled(
             w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
@@ -506,12 +520,24 @@ class MainViewer(QMainWindow):
 
         return qi
 
-    def draw_nodule_arrow(self, qpx=None, show=True):
+    def image_ind_to_series_number(self, image_ind=None):
+        if image_ind is None:
+            vp = self.frames.get_viewport(0)
+            image_ind = vp.image_ind
+        image_ind=int(image_ind)+1
+        for series_no, image_count in self.series_image_count.items():
+            if image_ind<=int(image_count):
+                return series_no, image_ind-1
+            else:
+                image_ind-=image_count
+        return None, None
+
+    def draw_nodule_arrow(self, qpx=None, show=True, series_no=None, ind=None):
 
         vp = self.frames.get_viewport(0)
         image_ind = vp.image_ind
         geo = vp.geometry()
-        im_w, im_h = self.cache[0]['gray'].shape[1], self.cache[0]['gray'].shape[0]
+        im_w, im_h = self.cache[image_ind]['gray'].shape[1], self.cache[image_ind]['gray'].shape[0]
 
         if qpx is None:
             qpx = vp.pixmap
@@ -520,19 +546,25 @@ class MainViewer(QMainWindow):
         painter.begin(qpx)
         painter.setPen(self.pen)
 
-        for nodule in self.saved_nodules[image_ind]:
-            mx, my = self.coord2mousePos((nodule[0], nodule[1]),
-                                         (geo.x(), geo.y(), geo.width(), geo.height()),
-                                         (im_w, im_h))
+        if series_no is None or ind is None:
+            series_no, ind = self.image_ind_to_series_number(image_ind)
 
-            # painter.drawLine(mx + 30, my + 30, mx + 100, my + 100)
-            # painter.drawPolygon(QPoint(mx + 15, my + 15),
-            #                     QPoint(mx + 45, my + 15),
-            #                     QPoint(mx + 15, my + 45))
-            painter.drawLine(mx + 15, my + 15, mx + 100, my + 100)
-            painter.drawPolygon(QPoint(mx, my),
-                                QPoint(mx + 30, my),
-                                QPoint(mx, my + 30))
+        try:
+            for nodule in self.saved_nodules[series_no][ind]:
+                mx, my = self.coord2mousePos((nodule[0], nodule[1]),
+                                             (geo.x(), geo.y(), geo.width(), geo.height()),
+                                             (im_w, im_h))
+
+                # painter.drawLine(mx + 30, my + 30, mx + 100, my + 100)
+                # painter.drawPolygon(QPoint(mx + 15, my + 15),
+                #                     QPoint(mx + 45, my + 15),
+                #                     QPoint(mx + 15, my + 45))
+                painter.drawLine(mx + 15, my + 15, mx + 100, my + 100)
+                painter.drawPolygon(QPoint(mx, my),
+                                    QPoint(mx + 30, my),
+                                    QPoint(mx, my + 30))
+        except:
+            pass
 
         painter.end()
         if show:
@@ -546,7 +578,7 @@ class MainViewer(QMainWindow):
         vp = self.frames.get_viewport(0)
         w, h = vp.width(), vp.height()
 
-        d = self.cache[0]['data']
+        d = self.cache[self.image_ind]['data']
         depth = len(self.cache)
 
         volume = np.zeros((d.shape[1], d.shape[0], depth), d.dtype)
@@ -569,20 +601,24 @@ class MainViewer(QMainWindow):
         x, y = coord
 
         if showSagCor:
-            self.localize(x, y)
+            if self.modality == 'CT' or self.modality == 'MR':
+                self.localize(x, y)
         else:
             # print '%d, %d, %d' % (x, y, vp.image_ind+1)
             self.save_nodule(x, y, vp.image_ind)
 
-    def save_nodule(self, x, y, z):
+    def save_nodule(self, x, y, z=None):
         with codecs.open(os.path.join(self.app.base_dir, 'output.txt'), 'a', 'utf-8') as text_file:
-            text_file.write('%s,%d,%d,%d\n' % (self.study_id, x + 1, y + 1, z + 1))
+            series_no, z = self.image_ind_to_series_number()
+            text_file.write('%s,%s,%d,%d,%d\n' % (self.study_id, series_no, x + 1, y + 1, z + 1))
         s = 'Nodule saved: %d, %d, %d' % (x + 1, y + 1, z + 1)
         QToolTip.showText(QCursor.pos(), s)
-        print s
-        if z not in self.saved_nodules:
-            self.saved_nodules[z] = []
-        self.saved_nodules[z].append([x, y])
+        print(s)
+        if series_no not in self.saved_nodules:
+            self.saved_nodules[series_no] = {}
+        if z not in self.saved_nodules[series_no]:
+            self.saved_nodules[series_no][z] = []
+        self.saved_nodules[series_no][z].append([x, y])
         self.draw_nodule_arrow()
 
     def mousePos2Coord(self, mousePos=(0, 0), viewport_dim=(0, 0, 2048, 2560), image_dim=(512, 512)):
@@ -612,7 +648,7 @@ class MainViewer(QMainWindow):
             i_h = h
             i_w = i_h * 1.0 / im_h * im_w
 
-            if not (x + (w - i_w) * 1.0 / 2) <= mx <= x(w + i_w) * 1.0 / 2:
+            if not (x + (w - i_w) * 1.0 / 2) <= mx <= x + (w + i_w) * 1.0 / 2:
                 return None
 
             coord1 = (my - y) * 1.0 / h
@@ -690,7 +726,7 @@ class MainViewer(QMainWindow):
         else:
             factor_z = factor_y = 1
 
-        d = self.cache[0]['gray']
+        d = self.cache[self.image_ind]['gray']
         # sag = np.zeros((len(self.cache), d.shape[0]), np.uint8)
         # cor = np.zeros((len(self.cache), d.shape[1]), np.uint8)
 
@@ -907,8 +943,8 @@ class MainViewer(QMainWindow):
         return image
 
     def load_old_hx(self, old_hx):
-        print self.AccNo
-        print old_hx
+        print(self.AccNo)
+        print(old_hx)
 
         self.old_hx_label.clear()
         self.old_hx_label.hide()
@@ -953,7 +989,7 @@ class MainViewer(QMainWindow):
             image_ind = vp.image_ind + 1
 
         if not 0 <= image_ind <= len(self.cache) - 1:
-            print 'No next image!'
+            print('No next image!')
             return
 
         self.show_lock.acquire()
@@ -1005,14 +1041,17 @@ class MainViewer(QMainWindow):
         qpx = QPixmap.fromImage(qi)
         vp.setPixmap(qpx)
         vp.pixmap = qpx
-        if image_ind in self.saved_nodules:
-            self.draw_nodule_arrow(qpx)
+
+        series_no, ind = self.image_ind_to_series_number(image_ind)
+        if series_no in self.saved_nodules and ind in self.saved_nodules[series_no]:
+            self.draw_nodule_arrow(qpx, series_no=series_no, ind=ind)
         self.show_lock.release()
 
-        self.this_image_interval = int(image_ind * 1.0 / 10)
-        if self.prior_image_interval != self.this_image_interval:
-            threading.Thread(target=self.preload_image).start()
-        self.prior_image_interval = self.this_image_interval
+        if self.modality =='CT' or self.modality =='MR':
+            self.this_image_interval = int(image_ind * 1.0 / 10)
+            if self.prior_image_interval != self.this_image_interval:
+                threading.Thread(target=self.preload_image).start()
+            self.prior_image_interval = self.this_image_interval
         self.showing = False
 
         # threading.Thread(target=self.preload_image_clean, args=(image_ind, 10)).start()
@@ -1036,7 +1075,7 @@ class MainViewer(QMainWindow):
 class ImageViewerApp(QApplication):
     dwData = 17
 
-    def __init__(self, list):
+    def __init__(self, list, base_dir, init_at):
         super(ImageViewerApp, self).__init__(list)
         self.screen_count = QDesktopWidget().screenCount()
         self.WM_COPYDATA_Listener = WM_COPYDATA_Listener(receiver=self.listener)
@@ -1085,19 +1124,28 @@ class ImageViewerApp(QApplication):
         self.connect(self, SIGNAL('hide_all'), self.hide_all)
         self.connect(self, SIGNAL('show_dialog'), self.show_dialog)
 
-        self.base_dir = r'E:\Nodule Detection\case CT'
+        self.base_dir = base_dir
         # self.base_dir = r'C:\CT_DICOM'
         # self.file_list=OrderedDict
         # self.file_list_ind=-1
 
         # self.load_local_dir()
-        self.load_local_dir(r'5340193')
+        self.load_local_dir(init_at)
         threading.Timer(0.5, lambda s: s.emit(SIGNAL('next_study'), self.study_index), [self]).start()
+
+    def sort_file_num(self, name):
+        n, _ =os.path.splitext(name)
+        match= re.search('\d+$', n)
+        if match:
+            return int(match.group())
+        else:
+            return name
+
 
     def load_local_dir(self, from_study_name=''):
         found_study_name_index = 0
         i = 0
-        self.base_dir = unicode(self.base_dir)
+        self.base_dir = str(self.base_dir)
         for study in os.listdir(self.base_dir):
             # print study
             study_dir=os.path.join(self.base_dir, study)
@@ -1107,12 +1155,15 @@ class ImageViewerApp(QApplication):
                 found_study_name_index = i
             i += 1
             self.study_list[study] = OrderedDict()
+            series_dir_count=0
             for series in os.listdir(study_dir):
                 series_dir = os.path.join(study_dir, series)
                 if not os.path.isdir(series_dir):
                     continue
+                series_dir_count+=1
                 self.study_list[study][series] = []
-                for images in sorted(glob.glob(os.path.join(series_dir, '*.dcm'))):
+                for images in sorted(glob.glob(os.path.join(series_dir, '*.dcm'))
+                        , key=self.sort_file_num):
                     self.study_list[study][series].append(images)
                 for subdir in os.listdir(series_dir):
                     if len(self.study_list[study][series]) != 0:
@@ -1120,8 +1171,16 @@ class ImageViewerApp(QApplication):
                     subdirname = os.path.join(series_dir, subdir)
                     if not os.path.isdir(subdirname):
                         continue
-                    for images in sorted(glob.glob(os.path.join(subdirname, '*.dcm'))):
+                    for images in sorted(glob.glob(os.path.join(subdirname, '*.dcm'))
+                            , key=self.sort_file_num):
                         self.study_list[study][series].append(images)
+
+            if series_dir_count==0:
+                self.study_list[study]['1']=[]
+                for images in sorted(glob.glob(os.path.join(study_dir, '*.dcm'))
+                        , key=self.sort_file_num):
+                    self.study_list[study]['1'].append(images)
+
 
         self.total_study_count = len(self.study_list)
 
@@ -1132,7 +1191,15 @@ class ImageViewerApp(QApplication):
         for series, images in self.study_list[study_name].items():
             for i, image in enumerate(images):
                 if i >= from_image_index:
-                    self.viewers[0].dicom_data.append(self.read_dicom(image))
+                    viewer=self.viewers[0]
+                    data, info = self.read_dicom(image)
+                    viewer.dicom_data.append(data)
+                    viewer.dicom_info_all.append(info)
+                    SN=str(info.SeriesNumber)
+                    if SN not in viewer.series_image_count:
+                        viewer.series_image_count[SN] = 1
+                    else:
+                        viewer.series_image_count[SN] += 1
 
     def load(self, jsonStr):
         logging.info(str(self) + ': ' + inspect.currentframe().f_code.co_name + '\n' + str(locals()) + '\n')
@@ -1197,7 +1264,7 @@ class ImageViewerApp(QApplication):
 
 
         except Exception as e:
-            print e
+            print(e)
             return
 
     def next_study(self, from_ind=None):
@@ -1247,7 +1314,7 @@ class ImageViewerApp(QApplication):
         self.show_study_lock.acquire()
         thisStudyInd = self.study_index - 1
         if thisStudyInd < 0:
-            print 'Beyond first study!'
+            print('Beyond first study!')
             self.show_study_lock.release()
             return
         thisViewerInd = self.prior_index(self.viewer_index, self.total_viewer_count)
@@ -1268,13 +1335,13 @@ class ImageViewerApp(QApplication):
             Send_WM_COPYDATA(self.bridge_hwnd, json.dumps({'exit': 1}), ImageViewerApp.dwData)
 
     def read_dicom(self, path):
-        f = dicom.read_file(path)
+        f = dicom.read_file(path, force=True)
 
         s, i = f.RescaleSlope, f.RescaleIntercept
         p = f.pixel_array
         ret = np.array(p, np.uint16)
         ret = (ret * s + i).astype(np.int16)
-        return ret
+        return ret, f
 
     def load_more_images(self, study_name, from_image_index):
         viewer = self.viewers[0]
@@ -1285,7 +1352,16 @@ class ImageViewerApp(QApplication):
                     viewer.cache=[]
                     return
                 elif count >= from_image_index:
-                    viewer.dicom_data.append(self.read_dicom(image))
+
+                    data, info = self.read_dicom(image)
+                    viewer.dicom_data.append(data)
+                    viewer.dicom_info_all.append(info)
+                    # print 'load: %s' % image
+                    SN = str(info.SeriesNumber)
+                    if SN not in viewer.series_image_count:
+                        viewer.series_image_count[SN] = 1
+                    else:
+                        viewer.series_image_count[SN] += 1
                     filename = os.path.basename(image)
                     while count >= len(viewer.dicom_data):
                         sleep(0.1)
@@ -1294,7 +1370,12 @@ class ImageViewerApp(QApplication):
                             return
 
                     data = viewer.dicom_data[count]
-                    gray = vp.apply_window(data)
+                    info = viewer.dicom_info_all[count]
+                    try:
+                        window_setting = (int(info.WindowCenter), int(info.WindowWidth))
+                    except:
+                        window_setting = (int(info.WindowCenter[0]), int(info.WindowWidth[0]))
+                    gray = vp.apply_window(data, window_setting)
                     qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8)
 
                     dic = {}
@@ -1313,14 +1394,15 @@ class ImageViewerApp(QApplication):
         # viewer = int(viewer)
         study = int(study)
         # w = self.viewers[viewer]
-        study_name = self.study_list.keys()[study]
-        print 'Study: %s' % (study_name,)
+        study_name = list(self.study_list.keys())[study]
+        print('Study: %s' % (study_name,))
         s = self.study_list[study_name]
         viewer = self.viewers[0]
         viewer.cache = []
         viewer.px_all = []
         viewer.qimage_cache = {}
         viewer.dicom_data = []
+        viewer.dicom_info_all = []
         cache = []
         # self.viewers.
         # count = 0
@@ -1329,15 +1411,34 @@ class ImageViewerApp(QApplication):
         w, h = vp.width(), vp.height()
         # im_w_f = w *1.0
         # im_h = w
+        viewer.series_image_count = OrderedDict()
+
+        all_count = -1
 
         for series, images in s.items():
             # viewer.cache[series] = OrderedDict()
             for count, image in enumerate(images):
-
-                if count < 20:
-                    viewer.dicom_data.append(self.read_dicom(image))
-
-                elif count == 20:
+                all_count+=1
+                if all_count < 20:
+                    try:
+                        data, info = self.read_dicom(image)
+                    except:
+                        with codecs.open(os.path.join(self.base_dir, 'error_study.txt'), 'a', 'utf-8') as text_file:
+                            text_file.write(study_name + '\n')
+                        self.study_index = study
+                        self.show_study_lock.release()
+                        th = threading.Timer(0.5, self.emit, [SIGNAL('next_study')])
+                        th.start()
+                        return
+                    viewer.dicom_data.append(data)
+                    viewer.dicom_info_all.append(info)
+                    # print 'load: %s' % image
+                    SN = str(info.SeriesNumber)
+                    if SN not in viewer.series_image_count:
+                        viewer.series_image_count[SN] = 1
+                    else:
+                        viewer.series_image_count[SN] += 1
+                elif all_count == 20:
                     # threading.Thread(target=self.load_dicom, args=(study_name, 20)).start()
                     try:
                         self.load_more_images_th_ev.set()
@@ -1352,12 +1453,18 @@ class ImageViewerApp(QApplication):
 
                 filename = os.path.basename(image)
                 # viewer.cache[series][filename] = OrderedDict()
-                while count >= len(viewer.dicom_data):
+                while all_count >= len(viewer.dicom_data):
                     sleep(0.1)
                 # data = self.read_dicom(image)
 
-                data = viewer.dicom_data[count]
-                gray = vp.apply_window(data)
+                data = viewer.dicom_data[all_count]
+                info = viewer.dicom_info_all[all_count]
+                try:
+                    window_setting = (int(info.WindowCenter), int(info.WindowWidth))
+                except:
+                    window_setting = (int(info.WindowCenter[0]), int(info.WindowWidth[0]))
+                gray = vp.apply_window(data, window_setting)
+
                 # gray = zoom(gray, (im_h, im_w), np.uint8)
                 qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8)
                 # qi = QImage(gray, gray.shape[1], gray.shape[0], gray.shape[1], QImage.Format_Indexed8).scaled(
@@ -1394,7 +1501,22 @@ class ImageViewerApp(QApplication):
                 # elif count > 30:
                 #     break
                 # count += 1
-            break
+
+            if all_count==20:
+                break
+            # break
+        else:
+            if all_count<20:
+                try:
+                    self.load_more_images_th_ev.set()
+                    self.load_more_images_th.join()
+                except:
+                    pass
+                viewer.cache = cache
+                self.load_more_images_th_ev.clear()
+                self.load_more_images_th = threading.Thread(target=self.load_more_images, args=(study_name, 20))
+                self.load_more_images_th.start()
+
         # qpx = QPixmap.fromImage(viewer.cache[0]['qimage'])
         # scaled = qpx.scaled(vp.width(), vp.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
@@ -1407,15 +1529,18 @@ class ImageViewerApp(QApplication):
         # viewer.qimage_cache[count] = scaled
         # vp.image_ind = 0
         vp.image_ind = 0
-        viewer.dicom_info = dicom.read_file(image)
-        viewer.next_image(0, 0)
+        viewer.dicom_info = dicom.read_file(image, force=True)
         viewer.study_id = study_name
+        self.load_study_saved_nodule(study)
+        viewer.next_image(0, 0)
+
+        viewer.modality = viewer.dicom_info.Modality
 
         # viewer.process_cache()
         # viewer.preload_image()
         self.study_index = study
         self.show_study_lock.release()
-        self.load_study_saved_nodule(study)
+
 
     def load_study_saved_nodule(self, study):
         try:
@@ -1429,12 +1554,15 @@ class ImageViewerApp(QApplication):
             if line[0] != self.viewers[0].study_id:
                 continue
             nodule = []
-            for i in range(1, 4):
+            series_no=line[1]
+            if series_no not in ret:
+                ret[series_no]={}
+            for i in range(2, 5):
                 nodule.append(int(line[i]) - 1)
-            z = nodule[2] - 1
-            if z not in ret:
-                ret[z] = []
-            ret[z].append([nodule[0], nodule[1]])
+            z = nodule[2]
+            if z not in ret[series_no]:
+                ret[series_no][z] = []
+            ret[series_no][z].append([nodule[0], nodule[1]])
         self.viewers[0].saved_nodules = ret
 
     def load_old_hx(self, AccNo=None, win=None):
@@ -1533,7 +1661,9 @@ def getMyDocPath():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING)
-    app = ImageViewerApp(sys.argv)
+    base_dir=r'E:\scsnake\Anonymized'
+    init_at=r'00061_20180919_Stereotic_Breast_Biopsy_Right'
+    app = ImageViewerApp(sys.argv, base_dir, init_at)
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
