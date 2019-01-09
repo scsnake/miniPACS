@@ -2,11 +2,11 @@
 
 import hashlib
 import json
-import os, sys
+import os
+import random
 import re
 import shutil
-import random
-from time import sleep
+import sys
 
 import requests
 import urllib3
@@ -19,13 +19,11 @@ import inspect
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
 # from multiprocessing import Pool
-from concurrent.futures import ThreadPoolExecutor
 import atexit
 from concurrent.futures.thread import _python_exit
 from functools import partial
 import threading
-import argparse
-from multiprocessing import Pool
+
 
 def initializer(func):
     """
@@ -743,3 +741,9 @@ class Main:
         Send_WM_COPYDATA(self.bridge_hwnd, json.dumps(msg), self.dwData)
 
 
+if __name__ == '__main__':
+    p = Portal('100860', r'4RFV5tgb')
+    p.pacsMobileNewDownloadJpeg('T0185543242', '6558738')
+    a = 1
+    # while not main.exit:
+    #     pass

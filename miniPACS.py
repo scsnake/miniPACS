@@ -5,25 +5,24 @@ import glob
 import inspect
 import json
 import logging
-import os, re
+import os
+import re
 import statistics as stat
 import sys
 import threading
 from collections import OrderedDict
 from contextlib import suppress
 from functools import partial
-from time import sleep, clock
 from pathlib import Path
+from time import sleep, clock
+
 import cv2
 import numpy as np
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
-# from PyQt4.QtCore import Qt, SIGNAL
-# from PyQt4.QtGui import QApplication, QMainWindow, QTextEdit, QMessageBox, QLabel, QImage
-# from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont
-# from PyQt4.QtGui import QWidget, QSizePolicy
 from screeninfo import get_monitors
 
+import portalLib
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 
 
@@ -244,6 +243,7 @@ class ProgressWin(QWidget):
         self.connect(self, SIGNAL('show'), self.show_self)
         self.connect(self, SIGNAL('hide'), self.hide)
         self.connect(self, SIGNAL('reset'), self.reset)
+
     def reset(self):
         self.total_count = 0
         self.read_count = 0
@@ -528,21 +528,22 @@ class ImageViewer(QMainWindow):
         AccNo = study['AccNo']
         folder_path = study['folder_path']
 
+        # if False:
         if not 'expected_image_count' in study:
-            
-            study['expected_image_count']=[]
+
+            study['expected_image_count'] = []
             dc = {}
             for im in Path(folder_path).glob('*.jpeg'):
-                m=re.search(r'^([^\s]+)\s([^\s]+)\s(\d+)', im.name)
+                m = re.search(r'^([^\s]+)\s([^\s]+)\s(\d+)', im.name)
                 if m:
                     if m.group(1) in dc:
-                        dc[m.group(1)]+=1
+                        dc[m.group(1)] += 1
                     else:
-                        dc[m.group(1)] =1
+                        dc[m.group(1)] = 1
             expected_image_count = dc[AccNo]
-            for k,v in dc.items():
-                d={}
-                d[k]=v
+            for k, v in dc.items():
+                d = {}
+                d[k] = v
                 study['expected_image_count'].append(d)
 
         expected_image_count = study['expected_image_count']
@@ -819,6 +820,7 @@ class ImageViewerApp(QApplication):
         self.show_index = -1
         self.study_list = {}
         self.preload_timers = []
+        self.portal = portalLib.Portal(noLogin=True)
         # self.study_list_lock = threading.Lock()
         self.show_study_lock = threading.Lock()
         self.load_thread_lock = threading.Lock()
@@ -953,6 +955,12 @@ class ImageViewerApp(QApplication):
                 Send_WM_COPYDATA(self.bridge_hwnd, json.dumps(d), ImageViewerApp.dwData)
                 if json_data['from'] == 'open_impax':
                     self.emit(SIGNAL('hide_all'))
+            elif 'downloadPortalJpeg' in json_data:
+                threading.Thread(target=self.portal.pacsMobileNewDownloadJpeg,
+                                 args={'accNo': json_data['accNo'],
+                                       'chartNo': json_data['chartNo'],
+                                       'flatten': True,
+                                       'folder': self.folder_path})
             elif 'sendReportEnd' in json_data:
                 self.progressWin.next_study(json_data['sendReportEnd'])
             elif 'fast_mode' in json_data:
@@ -1213,13 +1221,13 @@ class ImageViewerApp(QApplication):
                     mw.emit(SIGNAL('border_color_toggle'), True)
                 else:
                     mw.emit(SIGNAL('border_color_toggle'), False)
-            #
-            # if self.first_launch:
-            #     for i in range(3, 0, -1):
-            #         self.viewers[i].emit(SIGNAL('show_enable'))
-            # else:
-            #     c.emit(SIGNAL('border_color_toggle'))
-            #     self.viewers[(self.viewer_index + 3) % 4].emit(SIGNAL('show_enable'))
+                    #
+                    # if self.first_launch:
+                    #     for i in range(3, 0, -1):
+                    #         self.viewers[i].emit(SIGNAL('show_enable'))
+                    # else:
+                    #     c.emit(SIGNAL('border_color_toggle'))
+                    #     self.viewers[(self.viewer_index + 3) % 4].emit(SIGNAL('show_enable'))
         elif not self.fast_mode:
             try:
                 self.old_hx_threads_ev.set()
@@ -1364,4 +1372,4 @@ if __name__ == '__main__':
     # app.load(r'[{"AccNo":"T0173515899", "ChartNo":"6380534", "expected_image_count":[{"T0173515899":1}]}]')
     # app.load(
     #     r'[{"AccNo":"T0173580748", "ChartNo":"5180465", "expected_image_count":[{"T0173580748":1}, {"T0173528014":1}]}]')
-    sys.exit(app.exec_()
+    sys.exit(app.exec_())

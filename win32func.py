@@ -1,10 +1,10 @@
-import threading
-
 import ctypes
 import ctypes.wintypes
+import threading
 import win32api
-import win32con
 import win32gui
+
+import win32con
 
 
 class COPYDATASTRUCT(ctypes.Structure):
@@ -51,8 +51,15 @@ class WM_COPYDATA_Listener:
             None
         )
         self.receiver = receiver
-        threading.Thread(target=win32gui.PumpMessages).start()
+        self.thread = threading.Thread(target=win32gui.PumpMessages)
+        self.thread.start()
         # print self.hwnd
+
+    def quit(self):
+        # win32api.PostMessage(self.hwnd, win32con.WM_QUIT, 0, 0)
+        # win32api.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
+        # win32gui.DestroyWindow(self.hwnd)
+        win32gui.PostQuitMessage(0)
 
     def OnCopyData(self, *args, **kwargs):
         for k in ['hwnd', 'msg', 'wparam', 'lparam', 'dwData', 'cbData', 'lpData']:
