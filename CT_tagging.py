@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import queue as Queue
 import codecs
 import ctypes.wintypes
 import glob
@@ -8,22 +7,23 @@ import inspect
 import json
 import logging
 import os
+import queue as Queue
+import re
 import sys
 import threading
-import re
 from collections import OrderedDict
 from functools import partial
 from time import sleep, clock
 
 import cv2
-import pydicom as dicom
 import numpy as np
+import pydicom as dicom
 from PyQt4.QtCore import Qt, SIGNAL, QPoint
 from PyQt4.QtGui import QApplication, QMainWindow, QMessageBox, QLabel, QImage, QPainter, QPen, QBrush
 from PyQt4.QtGui import QPixmap, QDesktopWidget, QFont, QToolTip
 from PyQt4.QtGui import QWidget, QCursor
-from screeninfo import get_monitors
 from scipy.ndimage.interpolation import zoom
+from screeninfo import get_monitors
 
 from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
 

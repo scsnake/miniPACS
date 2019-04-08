@@ -28,7 +28,7 @@ def Send_WM_COPYDATA(hwnd, str, dwData=0):
 
 
 class WM_COPYDATA_Listener:
-    def __init__(self, receiver=None, title ="WM_COPYDATA_Listener"):
+    def __init__(self, receiver=None, title="WM_COPYDATA_Listener", useThread=True):
         message_map = {
             win32con.WM_COPYDATA: self.__OnCopyData
         }
@@ -40,9 +40,9 @@ class WM_COPYDATA_Listener:
         self.hwnd = win32gui.CreateWindow(
             classAtom,
             title,
-            0,
-            0,
-            0,
+            win32con.WS_OVERLAPPEDWINDOW,
+            win32con.CW_USEDEFAULT,
+            win32con.CW_USEDEFAULT,
             win32con.CW_USEDEFAULT,
             win32con.CW_USEDEFAULT,
             0,
@@ -50,17 +50,19 @@ class WM_COPYDATA_Listener:
             hinst,
             None
         )
-        self.receiver = receiver
-        self.thread = threading.Thread(target=win32gui.PumpMessages)
-        self.thread.start()
+        # win32gui.ShowWindow(self.hwnd, win32con.SW_SHOWNORMAL)
+        # win32gui.UpdateWindow(self.hwnd)
+        self.receiver = self.OnCopyData if receiver is None else receiver
+        if useThread:
+            threading.Thread(target=win32gui.PumpMessages).start()
+
+
         # print self.hwnd
-
     def quit(self):
-        # win32api.PostMessage(self.hwnd, win32con.WM_QUIT, 0, 0)
-        # win32api.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
-        # win32gui.DestroyWindow(self.hwnd)
-        win32gui.PostQuitMessage(0)
+        pass
 
+    def start(self):
+        win32gui.PumpMessages()
     def OnCopyData(self, *args, **kwargs):
         for k in ['hwnd', 'msg', 'wparam', 'lparam', 'dwData', 'cbData', 'lpData']:
             print(kwargs[k])
@@ -77,10 +79,33 @@ class WM_COPYDATA_Listener:
         t.start()
 
         return 1
-
-
+    #
+    # def wndProc(hWnd, message, wParam, lParam):
+    #
+    #     if message == win32con.WM_PAINT:
+    #         hDC, paintStruct = win32gui.BeginPaint(hWnd)
+    #
+    #         rect = win32gui.GetClientRect(hWnd)
+    #         win32gui.DrawText(
+    #             hDC,
+    #             'Hello send by Python via Win32!',
+    #             -1,
+    #             rect,
+    #             win32con.DT_SINGLELINE | win32con.DT_CENTER | win32con.DT_VCENTER)
+    #
+    #         win32gui.EndPaint(hWnd, paintStruct)
+    #         return 0
+    #
+    #     elif message == win32con.WM_DESTROY:
+    #         print('Being destroyed')
+    #         win32gui.PostQuitMessage(0)
+    #         return 0
+    #
+    #     else:
+    #         return win32gui.DefWindowProc(hWnd, message, wParam, lParam)
 
 
 if __name__ == '__main__':
-    Send_WM_COPYDATA( 0xfa19ee,'test')
+    # Send_WM_COPYDATA(1973580,'test')
     COPYDATA_Listener = WM_COPYDATA_Listener()
+    print(COPYDATA_Listener.hwnd)
