@@ -2,14 +2,14 @@ import ctypes.wintypes
 import logging
 import os
 import sys
-
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+import numpy as np
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import *
 from screeninfo import get_monitors
 
 
 # from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
-
 
 def _get_monitors():
     global app
@@ -27,11 +27,12 @@ def getMyDocPath():
 
 
 class ImageLabel(QLabel):
-    def __init__(self, *args):
+    def __init__(self, *args, parent=None):
         super(ImageLabel, self).__init__(*args)
         self.border_state = False
         self.setMouseTracking(True)
         self.id = 0
+        self.parent = parent
 
         self.border_toggle(False)
         self.setFrameShape(QFrame.Panel)
@@ -49,8 +50,10 @@ class ImageLabel(QLabel):
         border_width = 5 if self.border_state else 0
         self.setLineWidth(border_width)
 
+
     def enterEvent(self, event):
         logging.debug('Enter label #{}'.format(self.id))
+        self.parent.active_image_label_id = self.id
         self.border_toggle(True)
 
     def leaveEvent(self, event):
@@ -69,12 +72,15 @@ class ImageViewer(QMainWindow):
 
         self.rows = 4
         self.cols = 4
+        self.active_image_label_id = 0
 
         monitors = sorted(get_monitors(), key=lambda m: m.x)
         x = y = w = h = 0
         self.image_labels = []
+
         l_id = 0
         if len(monitors) > 1:
+            self.screen_count = len(monitors) - 1
             for i, m in enumerate(monitors[1:]):
                 if i == 0:
                     x = m.x
@@ -86,6 +92,7 @@ class ImageViewer(QMainWindow):
 
                 l_id = self.create_image_labels(self.rows, self.cols, m, (l_w, l_h), l_id)
         else:
+            self.screen_count = 0
             m = monitors[0]
             x, y, w, h = m.x, m.y, m.width, m.height
             l_w = int(m.width / self.cols)
@@ -93,9 +100,31 @@ class ImageViewer(QMainWindow):
 
             self.create_image_labels(self.rows, self.cols, m, (l_w, l_h), l_id)
 
+        self._base_counts = np.array((self.cols * self.rows, self.cols), dtype=np.int)
+
         self.setFixedSize(w, h)
         self.move(x, y)
         self.show_enable()
+
+    @property
+    def active_image_label(self):
+        return self.image_labels[self.active_image_label_id]
+
+    def wheelEvent(self, event):
+        d = event.angleDelta()
+        if d < 0:
+            if IS_DEBUG:
+                # self.active_image_label.setText(self.active_image_label.text() + '+')
+                logging.debug('test+')
+        elif d > 0:
+            if IS_DEBUG:
+                # self.active_image_label.setText(self.active_image_label.text()[:-1])
+                logging.debug('test-')
+
+    def id2coord(self, image_label_id):
+        which_screen, remainder = np.divmod(image_label_id, self._base_counts[0])
+        which_row, which_col = np.divmod(remainder, self._base_counts[1])
+        return which_screen, which_row, which_col
 
     def create_image_labels(self, rows, cols, monitor, label_w_h, init_id):
         m = monitor
@@ -103,7 +132,7 @@ class ImageViewer(QMainWindow):
 
         for r in range(rows):
             for c in range(cols):
-                imageLabel = ImageLabel(self)
+                imageLabel = ImageLabel(self, parent=self)
                 imageLabel.setStyleSheet('background-color: black;')
                 imageLabel.setFixedSize(l_w, l_h)
                 imageLabel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -115,7 +144,7 @@ class ImageViewer(QMainWindow):
                 imageLabel.id = init_id
 
                 init_id += 1
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                if IS_DEBUG:
                     imageLabel.setFont(QFont("Verdana", 50, QFont.Normal))
                     imageLabel.setStyleSheet('background-color: black; color: rgba(255,255,255,100); ')
                     imageLabel.setText('({},{})'.format(r + 1, c + 1))
@@ -149,5 +178,6 @@ class ImageViewerApp(QApplication):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
+    IS_DEBUG = logging.getLogger().isEnabledFor(logging.DEBUG)
     app = ImageViewerApp(sys.argv, os.path.join(getMyDocPath(), 'feedRIS'))
     sys.exit(app.exec_())
