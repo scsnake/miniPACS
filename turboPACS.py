@@ -17,7 +17,7 @@ from collections import OrderedDict
 import cv2
 import time
 from functools import partial
-
+import glob
 
 # import win32clipboard
 # from win32func import WM_COPYDATA_Listener, Send_WM_COPYDATA
@@ -38,15 +38,15 @@ def getMyDocPath():
 
 
 report_key_mapping = {
-    'Key_1': dict(l='', r='', b=''),
-    'Key_2': dict(l='', r='', b=''),
-    'Key_3': dict(l='', r='', b=''),
-    'Key_4': dict(l='', r='', b=''),
-    'Key_5': dict(l='', r='', b=''),
-    'Key_6': dict(l='', r='', b=''),
-    'Key_Q': dict(l='', r='', b=''),
-    'Key_W': dict(l='', r='', b=''),
-    'Key_E': dict(l='', r='', b='')
+    'Key_1': '',
+    'Key_2': '',
+    'Key_3': '',
+    'Key_4': '',
+    'Key_5': '',
+    'Key_6': '',
+    'Key_Q': '',
+    'Key_W': '',
+    'Key_E': ''
 }
 
 
@@ -55,12 +55,15 @@ def report_contents(study_info, state):
     side, pressed_valid_key = state
 
     info = 'Accession Number: {}\r\nChart Number: {}\r\nExamination Name: {}\r\n'.format(*study_info)
-    report = report_key_mapping[pressed_valid_key, side]
+    report = report_key_mapping[pressed_valid_key]
+    if side in report:
+        report = report[side]
     return info + report
 
 class ImageLabel(QLabel):
     show_image_sig = pyqtSignal()
     clear_sig = pyqtSignal()
+    load_path_sig = pyqtSignal([str])
 
     def __init__(self, *args, parent=None):
         super(ImageLabel, self).__init__(*args)
@@ -70,8 +73,9 @@ class ImageLabel(QLabel):
         self.parent = parent
         self.load_files = None
         self.loaded = OrderedDict()
-        self.image_ind = 0
+        self.image_ind = -1
         self.study_info = None
+        self.is_reported = False
         self.border_toggle(False)
         self.setFrameShape(QFrame.Panel)
 
@@ -81,6 +85,7 @@ class ImageLabel(QLabel):
         self.show_image_sig.connect(self.show_image)
 
         self.clear_sig.connect(self.clear)
+        self.load_path_sig.connect(self.load_path)
 
     def submit_state(self):
         if Qt.LeftButton:
@@ -96,7 +101,7 @@ class ImageLabel(QLabel):
         return (side, self.parent.pressed_valid_key)
 
     def submit(self):
-        if self.study_info is None:
+        if self.is_reported:
             return
         try:
             self.submit_lock.acquire()
@@ -123,6 +128,7 @@ class ImageLabel(QLabel):
             self.loaded = OrderedDict()
             self.image_ind = 0
             self.clear_sig.emit()
+            self.is_reported=True
             self.submit_lock.release()
 
     def border_toggle(self, to_state=None):
@@ -152,27 +158,35 @@ class ImageLabel(QLabel):
         self.border_toggle(False)
 
     def load_path(self, path=''):
-        if path is None or self.load_files is None:
+        if path is None:
             self.load_files = None
             self.loaded = OrderedDict()
             return
         elif path == '':
             path = self.load_files
 
-        for f in path:
+
+
+        for f in sorted(list(glob.glob(path)), key = lambda p: Path(p).stat().st_ctime):
+            f = Path(f)
             file_name = f.name
             if file_name in self.loaded:
                 continue
             self.loaded[file_name] = cv2.imread(str(f.resolve()), cv2.IMREAD_GRAYSCALE)
 
+        self.load_files = path
+
         th = threading.Timer(0.5, self.load_path)
         th.start()
         self.load_path_task = th
 
+        if self.image_ind == -1:
+            self.next_image()
+
     def show_image(self):
         try:
             self.show_lock.acquire()
-            image = self.loaded[self.image_ind]
+            image = list(self.loaded.items())[self.image_ind][1]
             w = self.width()
             h = self.height()
             px = QPixmap.fromImage(
@@ -266,10 +280,11 @@ class ImageViewer(QMainWindow):
             pass
 
     def dispatch_study(self):
+
         q = self.app.study_queue
         df = self.app.ris_data
         for label in self.image_labels:
-            if not self.load_files:
+            if label.load_files:
                 continue
             while 1:
                 try:
@@ -280,12 +295,16 @@ class ImageViewer(QMainWindow):
                     self.dispatch_study_task = th
                     return
                 accNo_chartNo = accNo + ' ' + chartNo
-                if Path(self.app.report_dir).joinpath(accNo_chartNo + '.txt').exists():
-                    df[df['照會單號'] == accNo]['reported'] = True
+
+                self.app.df_lock.acquire()
+
+                if Path(self.app.folder_path).joinpath(accNo_chartNo + '.txt').exists():
+                    df.iloc[np.where(df['照會單號'] == accNo)]['reported'] = 1
                     continue
-                label.load_path(Path(self.app.report_dir).joinpath(accNo_chartNo).glob(accNo_chartNo + ' *.jpeg'))
                 label.study_info = (accNo, chartNo, examName)
-                df[df['照會單號'] == accNo]['loaded'] = True
+                label.load_path_sig.emit(str(Path(self.app.folder_path).joinpath(accNo_chartNo).joinpath(accNo_chartNo + ' *.jpeg')))
+                df.iloc[np.where(df['照會單號'] == accNo)]['loaded'] = 1
+                self.app.df_lock.release()
                 break
 
         th = threading.Timer(1.0, self.dispatch_study)
@@ -329,10 +348,10 @@ class ImageViewer(QMainWindow):
                 imageLabel.id = init_id
 
                 init_id += 1
-                if IS_DEBUG:
-                    imageLabel.setFont(QFont("Verdana", 50, QFont.Normal))
-                    imageLabel.setStyleSheet('background-color: black; color: rgba(255,255,255,100); ')
-                    imageLabel.setText('({},{})'.format(r + 1, c + 1))
+                # if IS_DEBUG:
+                #     imageLabel.setFont(QFont("Verdana", 50, QFont.Normal))
+                #     imageLabel.setStyleSheet('background-color: black; color: rgba(255,255,255,100); ')
+                #     imageLabel.setText('({},{})'.format(r + 1, c + 1))
                 self.image_labels.append(imageLabel)
         return init_id
 
@@ -357,18 +376,23 @@ class ImageViewerApp(QApplication):
 
         self.screen_count = QDesktopWidget().screenCount()
         self.folder_path = folderPath
-        # self.load_clipboard()
+        self.df_lock = threading.Lock()
+        self.load_clipboard()
         self.viewer = ImageViewer(app=self)
 
         self.study_queue = Queue()
-        # self.scan_dir()
+        self.scan_dir()
+        th = threading.Timer(1.0, self.viewer.dispatch_study)
+        th.start()
+        self.viewer.dispatch_study_task = th
 
     def scan_dir(self):
+        self.df_lock.acquire()
         df = self.ris_data
-        for i, row in df[
-            (~df['狀態'].str.contains('已發報告')) &
-            (~df['queued']) &
-            (~df['reported'])].iterrows():
+        for i, row in df.iterrows():
+            if not ((row['狀態']!='已發報告') and (row['queued']=='0') and (row['reported']=='0')):
+                continue
+
             accNo, chartNo, examName = str(row['照會單號']), str(row['病歷號']), str(row['檢查名稱'])
             accNo_chartNo = '{} {}'.format(accNo, chartNo)
             if not self.folder_path.joinpath(accNo_chartNo).joinpath('{} 1.jpeg'.format(accNo_chartNo)).exists():
@@ -378,35 +402,44 @@ class ImageViewerApp(QApplication):
                 continue
 
             self.study_queue.put((accNo, chartNo, examName))
-            self.ris_data[i, 'queued'] = True
+            self.ris_data.iloc[i]['queued'] = 1
 
         th = threading.Timer(1.0, self.scan_dir)
         th.start()
         self.scan_dir_task = th
+        self.df_lock.release()
 
     def load_clipboard(self):
-        try:
-            clipboard = QApplication.clipboard().text()
-            data = np.array([[cell for cell in row.split('\t')] for row in clipboard.splitlines()])
+        logging.info('Wait RIS data copied ... ')
+        while 1:
+            try:
+                clipboard = QApplication.clipboard().text()
 
-            data[0, 0] = 'queued'
-            data[1:, 0] = False
+                assert '病歷號' in clipboard
+                assert '報告醫師' in clipboard
+                assert '照會單號' in clipboard
+                assert '檢查名稱' in clipboard
+                assert '狀態' in clipboard
 
-            data = np.insert(data, 0, np.repeat(False, data.shape[0]), axis=1)
-            data[0, 0] = 'reported'
+                data = np.array([[cell for cell in row.split('\t')] for row in clipboard.splitlines()])
 
-            data = np.insert(data, 0, np.repeat(False, data.shape[0]), axis=1)
-            data[0, 0] = 'loaded'
+                data[0, 0] = 'queued'
+                data[1:, 0] = 0
 
-            self.ris_data = df.DataFrame(data[1:], columns=data[0])
-            assert '病歷號' in self.ris_data.columns
-            assert '報告醫師' in self.ris_data.columns
-            assert '照會單號' in self.ris_data.columns
-            assert '檢查名稱' in self.ris_data.columns
-            assert '狀態' in self.ris_data.columns
-        except Exception as e:
-            logging.info('RIS data error: \n' + str(e))
-            self.quit()
+                data = np.insert(data, 0, np.repeat(0, data.shape[0]), axis=1)
+                data[0, 0] = 'reported'
+
+                data = np.insert(data, 0, np.repeat(0, data.shape[0]), axis=1)
+                data[0, 0] = 'loaded'
+
+                self.ris_data = df.DataFrame(data[1:], columns=data[0])
+                return
+
+            except Exception as e:
+                # logging.info('RIS data error: \n' + str(e))
+                # self.quit()
+                logging.debug('Waiting for RIS data...')
+                time.sleep(1)
 
 
 
